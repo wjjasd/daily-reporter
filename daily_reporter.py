@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox
 import sys
 import os
+import winreg
 from datetime import datetime, timedelta
 import threading
 import time
@@ -25,6 +26,49 @@ class DailyReporter:
             pass
 
         self.alarm_running = False
+        self._log_file_mtime = None
+
+        # 커스텀 메뉴바
+        menubar_frame = tk.Frame(root, bg="#f5f5f5")
+        menubar_frame.pack(fill="x", side="top")
+
+        self.autostart_var = tk.BooleanVar(value=self.get_autostart())
+
+        settings_dropdown = tk.Menu(
+            root, tearoff=0,
+            bg="#f5f5f5", fg="#333333",
+            activebackground="#e0e0e0", activeforeground="#333333",
+            relief="flat", bd=1
+        )
+        settings_dropdown.add_checkbutton(
+            label="윈도우 시작 시 자동 실행",
+            variable=self.autostart_var,
+            command=self.toggle_autostart
+        )
+
+        def show_settings(event=None):
+            btn = settings_btn
+            settings_dropdown.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
+
+        settings_btn = tk.Button(
+            menubar_frame, text="설정",
+            font=("Segoe UI", 9),
+            bg="#f5f5f5", fg="#555555",
+            activebackground="#e0e0e0", activeforeground="#333333",
+            relief="flat", cursor="hand2", padx=8, pady=3, bd=0,
+            command=show_settings
+        )
+        settings_btn.pack(side="left")
+
+        log_btn = tk.Button(
+            menubar_frame, text="로그 확인",
+            font=("Segoe UI", 9),
+            bg="#f5f5f5", fg="#555555",
+            activebackground="#e0e0e0", activeforeground="#333333",
+            relief="flat", cursor="hand2", padx=8, pady=3, bd=0,
+            command=self.open_log_file
+        )
+        log_btn.pack(side="left")
 
         # 실시간 시계
         self.clock_label = tk.Label(
@@ -89,6 +133,15 @@ class DailyReporter:
         )
         self.last_log_label.pack(pady=(2, 0))
 
+        self.copy_button = tk.Button(
+            root, text="복사", command=self.copy_last_log,
+            font=("Segoe UI", 8),
+            bg="#e0e0e0", fg="#555555",
+            activebackground="#cccccc", activeforeground="#333333",
+            relief="flat", cursor="hand2", width=6
+        )
+        self.copy_button.pack(pady=(4, 0))
+
         # 서명
         self.signature_label = tk.Label(
             root,
@@ -98,21 +151,82 @@ class DailyReporter:
         )
         self.signature_label.place(relx=1.0, rely=1.0, anchor='se', x=-5, y=-5)
 
+        self.poll_log_file()
+
+    REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    REG_NAME = "DailyReporter"
+
+    def get_autostart(self):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.REG_KEY, 0, winreg.KEY_READ) as key:
+                winreg.QueryValueEx(key, self.REG_NAME)
+            return True
+        except OSError:
+            return False
+
+    def toggle_autostart(self):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.REG_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                if self.autostart_var.get():
+                    winreg.SetValueEx(key, self.REG_NAME, 0, winreg.REG_SZ, f'"{sys.executable}"')
+                else:
+                    try:
+                        winreg.DeleteValue(key, self.REG_NAME)
+                    except FileNotFoundError:
+                        pass
+        except OSError:
+            messagebox.showerror("오류", "자동 실행 설정에 실패했습니다.")
+            self.autostart_var.set(not self.autostart_var.get())
+
+    def poll_log_file(self):
+        filename = self.get_today_filename()
+        if os.path.exists(filename):
+            mtime = os.path.getmtime(filename)
+            if mtime != self._log_file_mtime:
+                self._log_file_mtime = mtime
+                with open(filename, 'r', encoding='utf-8') as f:
+                    lines = [l.rstrip() for l in f.readlines() if l.strip()]
+                self.last_log_label.config(text=lines[-1] if lines else "-")
+        elif self._log_file_mtime is not None:
+            self._log_file_mtime = None
+            self.last_log_label.config(text="-")
+        self.root.after(5000, self.poll_log_file)
+
+    def open_log_file(self):
+        filename = self.get_today_filename()
+        if not os.path.exists(filename):
+            messagebox.showinfo("알림", "오늘 기록된 파일이 없습니다.")
+            return
+        os.startfile(filename)
+
     def update_clock(self):
         self.clock_label.config(text=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         self.root.after(1000, self.update_clock)
 
     def get_today_filename(self):
         today = datetime.now().strftime("%Y-%m-%d")
-        exec_dir = os.getcwd()
+        if hasattr(sys, '_MEIPASS'):
+            exec_dir = os.path.dirname(sys.executable)
+        else:
+            exec_dir = os.path.dirname(os.path.abspath(__file__))
         return os.path.join(exec_dir, f"{today}.txt")
+
+    def copy_last_log(self):
+        text = self.last_log_label.cget("text")
+        if text == "-":
+            return
+        # 타임스탬프(YYYY-MM-DD HH:MM:SS = 19자) 이후 내용만 복사
+        content = text[20:].strip()
+        self.root.clipboard_clear()
+        self.root.clipboard_append(content)
 
     def write_log(self, text):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         filename = self.get_today_filename()
         with open(filename, 'a', encoding='utf-8') as f:
             f.write(f"{now} {text}\n")
-        self.last_log_label.config(text=f"{now}  {text}")
+        self._log_file_mtime = os.path.getmtime(filename)
+        self.last_log_label.config(text=f"{now} {text}")
 
     def start_day(self):
         if not self.alarm_running:
@@ -172,6 +286,7 @@ class DailyReporter:
                 log_text = f"{current_time.strftime('%Y-%m-%d %H:%M:%S')} {content}"
                 with open(filename, 'a', encoding='utf-8') as f:
                     f.write(f"{log_text}\n")
+                self._log_file_mtime = os.path.getmtime(filename)
                 self.last_log_label.config(text=log_text)
                 popup.destroy()
             else:
