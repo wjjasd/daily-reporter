@@ -8,6 +8,8 @@ import threading
 import time
 import winsound
 
+ALARM_INTERVAL_SECONDS = 3600  # 테스트용 1분, 운영 시 3600으로 변경
+
 class DailyReporter:
     def __init__(self, root):
         self.root = root
@@ -27,6 +29,7 @@ class DailyReporter:
 
         self.alarm_running = False
         self._log_file_mtime = None
+        self.open_popups = []
 
         # 커스텀 메뉴바
         menubar_frame = tk.Frame(root, bg="#f5f5f5")
@@ -238,6 +241,17 @@ class DailyReporter:
             self.status_label.config(text="열일중!", fg="#f44336")
             threading.Thread(target=self.hourly_alarm, daemon=True).start()
 
+    def auto_end_day(self):
+        self.alarm_running = False
+        for popup in self.open_popups[:]:
+            try:
+                popup.destroy()
+            except Exception:
+                pass
+        self.open_popups.clear()
+        self.write_log("퇴근 (자동)")
+        self.root.after(500, self.root.destroy)
+
     def end_day(self):
         self.alarm_running = False
         self.write_log("퇴근")
@@ -250,16 +264,21 @@ class DailyReporter:
     def hourly_alarm(self):
         while self.alarm_running:
             now = datetime.now()
-            next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            next_hour = (now + timedelta(seconds=ALARM_INTERVAL_SECONDS)).replace(minute=0, second=0, microsecond=0)
             sleep_duration = (next_hour - now).total_seconds()
             time.sleep(sleep_duration)
             if self.alarm_running:
                 self.root.after(0, self.show_alarm_popup)
 
     def show_alarm_popup(self):
+        if len(self.open_popups) >= 4:
+            self.auto_end_day()
+            return
+
         winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
 
         popup = tk.Toplevel()
+        self.open_popups.append(popup)
         popup.title("정시 기록")
         popup.geometry("320x170")
         popup.resizable(False, False)
@@ -279,6 +298,13 @@ class DailyReporter:
         entry.pack(pady=4, padx=20)
         entry.focus_set()
 
+        def on_popup_close():
+            if popup in self.open_popups:
+                self.open_popups.remove(popup)
+            popup.destroy()
+
+        popup.protocol("WM_DELETE_WINDOW", on_popup_close)
+
         def save_entry(event=None):
             content = entry.get().strip()
             if content:
@@ -288,6 +314,8 @@ class DailyReporter:
                     f.write(f"{log_text}\n")
                 self._log_file_mtime = os.path.getmtime(filename)
                 self.last_log_label.config(text=log_text)
+                if popup in self.open_popups:
+                    self.open_popups.remove(popup)
                 popup.destroy()
             else:
                 messagebox.showwarning("입력 필요", "기록할 내용을 입력하세요.")
