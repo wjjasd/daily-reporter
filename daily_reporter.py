@@ -267,10 +267,16 @@ class DailyReporter:
             next_hour = (now + timedelta(seconds=ALARM_INTERVAL_SECONDS)).replace(minute=0, second=0, microsecond=0)
             sleep_duration = (next_hour - now).total_seconds()
             time.sleep(sleep_duration)
+            # sleep이 일찍 깨어난 경우 실제로 목표 시각이 될 때까지 대기
+            while datetime.now() < next_hour:
+                time.sleep(0.01)
             if self.alarm_running:
-                self.root.after(0, self.show_alarm_popup)
+                self.root.after(0, lambda t=next_hour: self.show_alarm_popup(t))
 
-    def show_alarm_popup(self):
+    def show_alarm_popup(self, current_time=None):
+        if current_time is None:
+            current_time = datetime.now().replace(minute=0, second=0, microsecond=0)
+
         if len(self.open_popups) >= 4:
             self.auto_end_day()
             return
@@ -284,8 +290,6 @@ class DailyReporter:
         popup.resizable(False, False)
         popup.configure(bg="#f5f5f5")
         popup.attributes('-topmost', True)
-
-        current_time = datetime.now().replace(minute=0, second=0, microsecond=0)
 
         tk.Label(
             popup,
