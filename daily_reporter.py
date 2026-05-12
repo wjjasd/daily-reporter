@@ -3,6 +3,8 @@ from tkinter import messagebox
 import sys
 import os
 import re
+import csv
+import io
 import json
 import zipfile
 import shutil
@@ -15,46 +17,33 @@ import winsound
 
 ALARM_INTERVAL_SECONDS = 3600
 
-# 템플릿(유타렉스 일일업무보고_양기정_26_04_16.hwpx) 고정 구조
-_TMPL_DATE      = "2026년 04월 16일"
-_TMPL_CHECKIN   = "09:00:00"
-_TMPL_CHECKOUT  = "18:00:00"
-_TMPL_WORKHOURS = " 8시간"
 _TMPL_TIMES = [
-    "09:00~10:00", "10:00~11:00", "11:00~12:30",
-    "12:30~13:30", "13:30~14:00", "14:00~15:00",
+    "09:00~10:00", "10:00~11:00", "11:00~12:00",
+    "12:00~13:00", "13:00~14:00", "14:00~15:00",
     "15:00~16:00", "16:00~17:00", "17:00~18:00",
 ]
-# (프로젝트명 칸 있음?, 업무내용 텍스트)
-_TMPL_ROWS = [
-    (True,  "재실 이미지 전송 기능 추가"),
-    (True,  "재실 이미지 전송 기능 추가"),
-    (True,  "재실 이미지 전송 기능 추가"),
-    (False, "점심 식사"),
-    (True,  "앱 배포"),
-    (True,  "LCS 연동 검토"),
-    (True,  "LCS 연동 검토"),
-    (True,  "LCS 연동 검토"),
-    (True,  "UDP TEST"),
-]
 
 
-def _zip_replace(path, replacements):
-    tmp = path + ".tmp"
-    with zipfile.ZipFile(path, "r") as zin:
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = zin.read(item.filename)
-                if item.filename.startswith("Contents/") and item.filename.endswith(".xml"):
-                    text = data.decode("utf-8")
-                    for old, new in replacements.items():
-                        text = text.replace(old, new)
-                    data = text.encode("utf-8")
-                zout.writestr(item, data)
-    os.replace(tmp, path)
 
 
-def _zip_replace_seq(path, old, new_list):
+def _zip_replace_atomic(path, direct_map, seq_map):
+    """모든 치환을 단일 XML 패스에서 원자적으로 수행. 치환값이 다른 플레이스홀더를 포함해도 안전."""
+    # ASCII 전용 마커: XML 1.0 안전, 한글 HWPX 문서에 절대 등장하지 않는 패턴
+    cnt = [0]
+    def mk():
+        cnt[0] += 1
+        return f"XWKRX{cnt[0]:06d}X"
+
+    d_markers = {old: mk() for old in direct_map}
+    s_markers = {old: [mk() for _ in new_list] for old, new_list in seq_map.items()}
+
+    final = {}
+    for old, m in d_markers.items():
+        final[m] = direct_map[old]
+    for old, ms in s_markers.items():
+        for m, val in zip(ms, seq_map[old]):
+            final[m] = val
+
     tmp = path + ".tmp"
     with zipfile.ZipFile(path, "r") as zin:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
@@ -62,11 +51,73 @@ def _zip_replace_seq(path, old, new_list):
                 data = zin.read(item.filename)
                 if "section" in item.filename and item.filename.endswith(".xml"):
                     text = data.decode("utf-8")
-                    for new_val in new_list:
-                        text = text.replace(old, new_val, 1)
+                    # 1패스: 모든 원본 텍스트를 마커로 교체
+                    for old, m in d_markers.items():
+                        text = text.replace(old, m)
+                    for old, ms in s_markers.items():
+                        for m in ms:
+                            text = text.replace(old, m, 1)
+                    # 2패스: 마커를 최종 값으로 교체
+                    for m, val in final.items():
+                        text = text.replace(m, val)
                     data = text.encode("utf-8")
                 zout.writestr(item, data)
     os.replace(tmp, path)
+
+def _xml_escape(text):
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+
+def _fill_empty_runs(xml_fragment, texts):
+    """row_frag 내의 self-closing <hp:run .../> 에 texts[0], texts[1], ... 순서로 삽입."""
+    count = [0]
+    def replacer(m):
+        idx = count[0]
+        count[0] += 1
+        if idx < len(texts) and texts[idx]:
+            ref = re.search(r'charPrIDRef="\d+"', m.group()).group()
+            return f'<hp:run {ref}><hp:t>{_xml_escape(texts[idx])}</hp:t></hp:run>'
+        return m.group()
+    return re.sub(r'<hp:run\s+charPrIDRef="\d+"[^>]*/>', replacer, xml_fragment)
+
+
+def _parse_weekly_template_rows(tmpl_src):
+    """
+    주간 템플릿 XML에서 전주 데이터 행의 (proj_texts, desc_texts)를 동적 추출.
+    col0=프로젝트, col1=업무내용, col3=날짜(MM.DD) 인 행을 데이터 행으로 인식.
+    Returns (date_str, data_rows) where data_rows = [(proj_texts, desc_texts), ...]
+    """
+    with zipfile.ZipFile(tmpl_src, 'r') as z:
+        xml = z.read('Contents/section0.xml').decode('utf-8')
+
+    trs = list(re.finditer(r'<hp:tr\b', xml))
+    date_str = ''
+    data_rows = []
+
+    for idx, tr_match in enumerate(trs):
+        start = tr_match.start()
+        end = trs[idx + 1].start() if idx + 1 < len(trs) else len(xml)
+        row_xml = xml[start:end]
+
+        cell_texts = {}
+        for cell_match in re.finditer(r'<hp:tc\b.*?(?=<hp:tc\b|</hp:tr>)', row_xml, re.DOTALL):
+            cell_xml = cell_match.group()
+            col_m = re.search(r'colAddr="(\d+)"', cell_xml)
+            if not col_m:
+                continue
+            col = int(col_m.group(1))
+            texts = [t for t in re.findall(r'<hp:t[^>]*>([^<]*)<', cell_xml) if t.strip()]
+            if texts:
+                cell_texts[col] = texts
+
+        if 0 in cell_texts and 3 in cell_texts:
+            date_val = cell_texts[3][0]
+            if re.match(r'\d{2}\.\d{2}', date_val):
+                if not date_str:
+                    date_str = date_val
+                data_rows.append((cell_texts[0], cell_texts.get(1, [])))
+
+    return date_str, data_rows
 
 
 class DailyReporter:
@@ -100,6 +151,7 @@ class DailyReporter:
 
         self.autostart_var = tk.BooleanVar(value=self.get_autostart())
         self.auto_fill_var = tk.BooleanVar(value=config.get('auto_fill', True))
+        self.auto_resume_var = tk.BooleanVar(value=config.get('auto_resume', True))
 
         settings_dropdown = tk.Menu(
             root, tearoff=0,
@@ -116,6 +168,11 @@ class DailyReporter:
             label="이전 내용 자동 입력",
             variable=self.auto_fill_var,
             command=lambda: self._save_config('auto_fill', self.auto_fill_var.get())
+        )
+        settings_dropdown.add_checkbutton(
+            label="시작 시 출근 상태 자동 복원",
+            variable=self.auto_resume_var,
+            command=lambda: self._save_config('auto_resume', self.auto_resume_var.get())
         )
 
         def show_settings(event=None):
@@ -151,6 +208,16 @@ class DailyReporter:
             command=self.generate_report
         )
         report_btn.pack(side="left")
+
+        weekly_btn = tk.Button(
+            menubar_frame, text="주간보고 생성",
+            font=("Segoe UI", 9),
+            bg="#f5f5f5", fg="#1a6bbf",
+            activebackground="#e0e0e0", activeforeground="#1a6bbf",
+            relief="flat", cursor="hand2", padx=8, pady=3, bd=0,
+            command=self.show_weekly_date_picker
+        )
+        weekly_btn.pack(side="left")
 
         # 실시간 시계
         self.clock_label = tk.Label(
@@ -230,6 +297,7 @@ class DailyReporter:
         self.signature_label.place(relx=1.0, rely=1.0, anchor='se', x=-5, y=-5)
 
         self.poll_log_file()
+        self.root.after(200, self._try_auto_resume)
 
     # ── 설정 저장/로드 ────────────────────────────────────────────
     def _config_path(self):
@@ -288,7 +356,31 @@ class DailyReporter:
             exec_dir = os.path.dirname(sys.executable)
         else:
             exec_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(exec_dir, f"{today}.txt")
+        return os.path.join(exec_dir, f"{today}.csv")
+
+    def _parse_csv_line(self, line):
+        """CSV 한 줄을 (date, time, project, desc) 로 파싱. 실패 시 None."""
+        try:
+            row = next(csv.reader(io.StringIO(line)))
+            if len(row) >= 4:
+                return tuple(row[:4])
+            if len(row) == 3:
+                return (row[0], row[1], row[2], '')
+        except Exception:
+            pass
+        return None
+
+    def _write_log_row(self, proj, desc):
+        """CSV 행 한 줄을 파일에 append하고 raw 라인 문자열을 반환."""
+        now = datetime.now()
+        filename = self.get_today_filename()
+        buf = io.StringIO()
+        csv.writer(buf).writerow([now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), proj, desc])
+        raw = buf.getvalue().rstrip('\r\n')
+        with open(filename, 'a', encoding='utf-8-sig', newline='') as f:
+            f.write(raw + '\n')
+        self._log_file_mtime = os.path.getmtime(filename)
+        return raw
 
     def poll_log_file(self):
         filename = self.get_today_filename()
@@ -296,11 +388,11 @@ class DailyReporter:
             mtime = os.path.getmtime(filename)
             if mtime != self._log_file_mtime:
                 self._log_file_mtime = mtime
-                with open(filename, 'r', encoding='utf-8') as f:
+                with open(filename, 'r', encoding='utf-8-sig') as f:
                     lines = [l.rstrip() for l in f if l.strip()]
                 if lines:
                     self._last_log_raw = lines[-1]
-                    self.last_log_label.config(text=lines[-1].replace('\t', '  |  '))
+                    self.last_log_label.config(text=self._format_log_display(lines[-1]))
                 else:
                     self.last_log_label.config(text="-")
         elif self._log_file_mtime is not None:
@@ -308,6 +400,19 @@ class DailyReporter:
             self._last_log_raw = ""
             self.last_log_label.config(text="-")
         self.root.after(5000, self.poll_log_file)
+
+    def _format_log_display(self, raw):
+        """CSV raw 라인을 UI 표시용 문자열로 변환."""
+        parsed = self._parse_csv_line(raw)
+        if not parsed:
+            return raw
+        date, time_, proj, desc = parsed
+        base = f"{date} {time_}"
+        if proj and desc:
+            return f"{base} {proj}  |  {desc}"
+        if proj:
+            return f"{base} {proj}"
+        return base
 
     def open_log_file(self):
         filename = self.get_today_filename()
@@ -323,51 +428,68 @@ class DailyReporter:
     def copy_last_log(self):
         if not self._last_log_raw or self._last_log_raw == "-":
             return
-        content = self._last_log_raw[20:].strip()  # 타임스탬프 제거
-        if '\t' in content:
-            content = content.split('\t', 1)[1]   # 업무내용만 복사
+        parsed = self._parse_csv_line(self._last_log_raw)
+        content = parsed[3] if parsed and parsed[3] else (parsed[2] if parsed else self._last_log_raw)
         self.root.clipboard_clear()
         self.root.clipboard_append(content)
 
     def write_log(self, text):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        filename = self.get_today_filename()
-        with open(filename, 'a', encoding='utf-8') as f:
-            f.write(f"{now} {text}\n")
-        self._log_file_mtime = os.path.getmtime(filename)
-        self._last_log_raw = f"{now} {text}"
-        self.last_log_label.config(text=f"{now} {text}".replace('\t', '  |  '))
+        raw = self._write_log_row(text, "")
+        self._last_log_raw = raw
+        self.last_log_label.config(text=self._format_log_display(raw))
 
     def _get_last_log_entry(self):
         """마지막 업무 로그의 (project, content)를 반환."""
         filename = self.get_today_filename()
         if not os.path.exists(filename):
             return '', ''
-        with open(filename, 'r', encoding='utf-8') as f:
+        with open(filename, 'r', encoding='utf-8-sig') as f:
             lines = [l.rstrip() for l in f if l.strip()]
         for line in reversed(lines):
-            parts = line.split(' ', 2)
-            if len(parts) < 3:
+            parsed = self._parse_csv_line(line)
+            if not parsed:
                 continue
-            d = parts[2]
-            if d == '출근' or '퇴근' in d:
+            _, _, proj, desc = parsed
+            if proj == '출근' or '퇴근' in proj:
                 continue
-            if '\t' in d:
-                proj, desc = d.split('\t', 1)
-                return proj, desc
-            return '', d
+            return proj, desc
         return '', ''
 
     # ── 출퇴근 ───────────────────────────────────────────────────
+    def _resume_checkin(self):
+        """출근 UI/상태 전환 (로그 쓰기 없음). start_day와 _try_auto_resume에서 공유."""
+        self.alarm_running = True
+        self.start_button.config(state="disabled", bg="#cccccc", fg="#aaaaaa", cursor="arrow")
+        self.end_button.config(state="normal", bg="#f44336", fg="white",
+                               activebackground="#e53935", activeforeground="white", cursor="hand2")
+        self.status_label.config(text="열일중!", fg="#f44336")
+        threading.Thread(target=self.hourly_alarm, daemon=True).start()
+
     def start_day(self):
         if not self.alarm_running:
             self.write_log("출근")
-            self.alarm_running = True
-            self.start_button.config(state="disabled", bg="#cccccc", fg="#aaaaaa", cursor="arrow")
-            self.end_button.config(state="normal", bg="#f44336", fg="white",
-                                   activebackground="#e53935", activeforeground="white", cursor="hand2")
-            self.status_label.config(text="열일중!", fg="#f44336")
-            threading.Thread(target=self.hourly_alarm, daemon=True).start()
+            self._resume_checkin()
+
+    def _try_auto_resume(self):
+        """오늘 로그에 출근 기록이 있고 퇴근이 없으면 자동으로 출근 상태로 복원."""
+        if self.alarm_running or not self.auto_resume_var.get():
+            return
+        filename = self.get_today_filename()
+        if not os.path.exists(filename):
+            return
+        has_checkin = False
+        has_checkout = False
+        with open(filename, 'r', encoding='utf-8-sig', newline='') as f:
+            for row in csv.reader(f):
+                if len(row) < 3:
+                    continue
+                proj = row[2]
+                if proj == '출근':
+                    has_checkin = True
+                elif '퇴근' in proj:
+                    has_checkout = True
+        if has_checkin and not has_checkout:
+            self._resume_checkin()
 
     def auto_end_day(self):
         self.alarm_running = False
@@ -393,13 +515,17 @@ class DailyReporter:
     def hourly_alarm(self):
         while self.alarm_running:
             now = datetime.now()
-            next_hour = (now + timedelta(seconds=ALARM_INTERVAL_SECONDS)).replace(minute=0, second=0, microsecond=0)
-            sleep_duration = (next_hour - now).total_seconds()
+            next_mark = now + timedelta(seconds=ALARM_INTERVAL_SECONDS)
+            if ALARM_INTERVAL_SECONDS >= 3600:
+                next_mark = next_mark.replace(minute=0, second=0, microsecond=0)
+            else:
+                next_mark = next_mark.replace(second=0, microsecond=0)
+            sleep_duration = (next_mark - now).total_seconds()
             time.sleep(sleep_duration)
-            while datetime.now() < next_hour:
+            while datetime.now() < next_mark:
                 time.sleep(0.01)
             if self.alarm_running:
-                self.root.after(0, lambda t=next_hour: self.show_alarm_popup(t))
+                self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
 
     def show_alarm_popup(self, current_time=None):
         if current_time is None:
@@ -463,14 +589,20 @@ class DailyReporter:
             if not content:
                 messagebox.showwarning("입력 필요", "업무내용을 입력하세요.")
                 return
-            log_content = f"{proj}\t{content}" if proj else content
+            buf = io.StringIO()
+            csv.writer(buf).writerow([
+                current_time.strftime('%Y-%m-%d'),
+                current_time.strftime('%H:%M:%S'),
+                proj, content
+            ])
+            raw = buf.getvalue().rstrip('\r\n')
             filename = self.get_today_filename()
-            log_text = f"{current_time.strftime('%Y-%m-%d %H:%M:%S')} {log_content}"
-            with open(filename, 'a', encoding='utf-8') as f:
-                f.write(f"{log_text}\n")
+            with open(filename, 'a', encoding='utf-8-sig', newline='') as f:
+                f.write(raw + '\n')
             self._log_file_mtime = os.path.getmtime(filename)
-            self._last_log_raw = log_text
-            self.last_log_label.config(text=log_text.replace('\t', '  |  '))
+            self._last_log_raw = raw
+            display = f"{proj}  |  {content}" if proj else content
+            self.last_log_label.config(text=display)
             if popup in self.open_popups:
                 self.open_popups.remove(popup)
             popup.destroy()
@@ -492,47 +624,44 @@ class DailyReporter:
             messagebox.showinfo("알림", "오늘 기록된 파일이 없습니다.")
             return
 
-        entries = []
-        with open(log_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split(' ', 2)
-                if len(parts) < 3:
-                    continue
-                entries.append((parts[1], parts[2]))  # (HH:MM:SS, 내용)
-
         checkin_time = None
         checkout_time = None
+        log_date = None
         work_entries = []  # (HH:MM:SS, project, desc)
-        for t, d in entries:
-            if d == '출근':
-                checkin_time = t
-            elif '퇴근' in d:
-                checkout_time = t
-            else:
-                if '\t' in d:
-                    proj, desc = d.split('\t', 1)
+        with open(log_file, 'r', encoding='utf-8-sig', newline='') as f:
+            for row in csv.reader(f):
+                if len(row) < 3:
+                    continue
+                if log_date is None and row[0]:
+                    log_date = row[0]  # YYYY-MM-DD
+                t, proj = row[1], row[2]
+                desc = row[3] if len(row) >= 4 else ''
+                if proj == '출근':
+                    checkin_time = t
+                elif '퇴근' in proj:
+                    checkout_time = t
                 else:
-                    proj, desc = '-', d
-                work_entries.append((t, proj, desc))
+                    work_entries.append((t, proj, desc))
 
-        # 업무 행: 각 항목은 이전 항목 시각~현재 항목 시각 구간
-        log_rows = []  # (time_range, project, desc)
-        for i, (t, proj, desc) in enumerate(work_entries):
+        # 로그 순서대로 템플릿 행에 순차 배정
+        log_rows = []  # (time_range, proj, desc)
+        for i, (t, proj, desc) in enumerate(work_entries[:len(_TMPL_TIMES)]):
             start = checkin_time if i == 0 else work_entries[i - 1][0]
             log_rows.append((f"{(start or t)[:5]}~{t[:5]}", proj, desc))
 
-        today = datetime.now()
-        date_str = f"{today.year}년 {today.month:02d}월 {today.day:02d}일"
+        # 날짜는 로그 파일 기준
+        if log_date:
+            d = datetime.strptime(log_date, "%Y-%m-%d")
+        else:
+            d = datetime.now()
+        date_str = f"{d.year}년 {d.month:02d}월 {d.day:02d}일"
 
-        work_hours = _TMPL_WORKHOURS
+        work_hours_str = None
         if checkin_time and checkout_time:
             ci = datetime.strptime(checkin_time, "%H:%M:%S")
             co = datetime.strptime(checkout_time, "%H:%M:%S")
             h = int((co - ci).total_seconds() // 3600)
-            work_hours = f" {h}시간"
+            work_hours_str = f" {h}시간"
 
         if hasattr(sys, '_MEIPASS'):
             exe_dir = os.path.dirname(sys.executable)
@@ -547,44 +676,200 @@ class DailyReporter:
             return
 
         out_dir = os.path.dirname(log_file)
-        date_suffix = today.strftime("%y_%m_%d")
+        date_suffix = d.strftime("%y_%m_%d")
         out_file = os.path.join(out_dir, f"일일업무보고_{date_suffix}.hwpx")
 
         try:
-            shutil.copy(tmpl_src, out_file)
+            # 템플릿 XML을 메모리에서 수정 후 한 번에 기록
+            with zipfile.ZipFile(tmpl_src, 'r') as zin:
+                entries = [(item, zin.read(item.filename)) for item in zin.infolist()]
 
-            # 1. 날짜·시각 직접 치환
-            direct = {_TMPL_DATE: date_str}
-            if checkin_time:
-                direct[_TMPL_CHECKIN] = checkin_time
-            if checkout_time:
-                direct[_TMPL_CHECKOUT] = checkout_time
-            direct[_TMPL_WORKHOURS] = work_hours
-            for i, tmpl_time in enumerate(_TMPL_TIMES):
-                direct[tmpl_time] = log_rows[i][0] if i < len(log_rows) else ""
-            _zip_replace(out_file, direct)
+            section_idx = next(
+                i for i, (item, _) in enumerate(entries)
+                if 'section' in item.filename and item.filename.endswith('.xml')
+            )
+            xml = entries[section_idx][1].decode('utf-8')
 
-            # 2. PROJECT명 순차 치환 (상업시설 × 8)
-            proj_indices = [i for i, (has_proj, _) in enumerate(_TMPL_ROWS) if has_proj]
-            proj_values = [log_rows[i][1] if i < len(log_rows) else "" for i in proj_indices]
-            _zip_replace_seq(out_file, "상업시설", proj_values)
+            # 1. 날짜·시각 동적 치환 (템플릿의 패턴을 찾아 교체)
+            xml = re.sub(r'\d{4}년 \d{2}월 \d{2}일', date_str, xml)
 
-            # 3. 업무내용 순차 치환
-            desc_groups = OrderedDict()
-            for i, (_, desc) in enumerate(_TMPL_ROWS):
-                desc_groups.setdefault(desc, []).append(i)
-            for tmpl_desc, positions in desc_groups.items():
-                values = [log_rows[pos][2] if pos < len(log_rows) else "" for pos in positions]
-                if len(values) == 1:
-                    _zip_replace(out_file, {tmpl_desc: values[0]})
-                else:
-                    _zip_replace_seq(out_file, tmpl_desc, values)
+            # HH:MM:SS 패턴 순서대로 첫 번째=출근, 두 번째=퇴근으로 단일 패스 치환
+            _time_count = [0]
+            def _replace_hms(m):
+                _time_count[0] += 1
+                if _time_count[0] == 1:
+                    return checkin_time if checkin_time else m.group()
+                if _time_count[0] == 2:
+                    return checkout_time if checkout_time else m.group()
+                return m.group()
+            xml = re.sub(r'\d{2}:\d{2}:\d{2}', _replace_hms, xml)
+
+            if work_hours_str:
+                xml = re.sub(r' *\d+시간', work_hours_str, xml, count=1)
+
+            # 2. 시간 슬롯별: 시간 텍스트 교체 + 프로젝트·업무내용 삽입
+            for i, slot in enumerate(_TMPL_TIMES):
+                slot_pos = xml.find(slot)
+                if slot_pos == -1:
+                    continue
+                next_pos = len(xml)
+                for next_slot in _TMPL_TIMES[i + 1:]:
+                    p = xml.find(next_slot, slot_pos)
+                    if p != -1:
+                        next_pos = p
+                        break
+                row_frag = xml[slot_pos:next_pos]
+                if i < len(log_rows):
+                    time_range, proj, desc = log_rows[i]
+                    row_frag = row_frag.replace(slot, time_range, 1)
+                    row_frag = _fill_empty_runs(row_frag, [proj, desc])
+                xml = xml[:slot_pos] + row_frag + xml[next_pos:]
+
+            # 수정된 XML을 출력 파일에 단일 패스로 기록
+            with zipfile.ZipFile(out_file, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for idx, (item, data) in enumerate(entries):
+                    zout.writestr(item, xml.encode('utf-8') if idx == section_idx else data)
 
             os.startfile(out_file)
             messagebox.showinfo("완료", f"일일보고가 생성됐습니다.\n{os.path.basename(out_file)}")
 
         except Exception as e:
             messagebox.showerror("오류", f"보고서 생성 실패:\n{e}")
+
+    def show_weekly_date_picker(self):
+        today = datetime.now().date()
+        # 저번 주 월요일: 이번 주 월요일에서 7일 전
+        last_monday = today - timedelta(days=today.weekday() + 7)
+        last_friday = last_monday + timedelta(days=4)
+
+        popup = tk.Toplevel(self.root)
+        popup.title("주간보고 기간 선택")
+        popup.geometry("300x160")
+        popup.resizable(False, False)
+        popup.configure(bg="#f5f5f5")
+        popup.grab_set()
+
+        tk.Label(popup, text="시작일 (YYYY-MM-DD)", bg="#f5f5f5", font=("Segoe UI", 9)).pack(pady=(16, 2))
+        start_var = tk.StringVar(value=last_monday.strftime("%Y-%m-%d"))
+        start_entry = tk.Entry(popup, textvariable=start_var, font=("Segoe UI", 10), width=18, justify="center")
+        start_entry.pack()
+
+        tk.Label(popup, text="종료일 (YYYY-MM-DD)", bg="#f5f5f5", font=("Segoe UI", 9)).pack(pady=(8, 2))
+        end_var = tk.StringVar(value=last_friday.strftime("%Y-%m-%d"))
+        end_entry = tk.Entry(popup, textvariable=end_var, font=("Segoe UI", 10), width=18, justify="center")
+        end_entry.pack()
+
+        def on_generate():
+            try:
+                start = datetime.strptime(start_var.get().strip(), "%Y-%m-%d").date()
+                end = datetime.strptime(end_var.get().strip(), "%Y-%m-%d").date()
+            except ValueError:
+                messagebox.showerror("오류", "날짜 형식이 올바르지 않습니다.\nYYYY-MM-DD 형식으로 입력하세요.", parent=popup)
+                return
+            if start > end:
+                messagebox.showerror("오류", "시작일이 종료일보다 늦습니다.", parent=popup)
+                return
+            popup.destroy()
+            self.generate_weekly_report(start, end)
+
+        tk.Button(
+            popup, text="생성하기",
+            font=("Segoe UI", 10, "bold"),
+            bg="#1a6bbf", fg="white",
+            activebackground="#155a99", activeforeground="white",
+            relief="flat", cursor="hand2", padx=12, pady=4,
+            command=on_generate
+        ).pack(pady=(12, 0))
+        popup.bind("<Return>", lambda e: on_generate())
+        start_entry.focus_set()
+
+    def generate_weekly_report(self, start_date, end_date):
+        if hasattr(sys, '_MEIPASS'):
+            exe_dir = os.path.dirname(sys.executable)
+            tmpl_src = os.path.join(exe_dir, 'template_weekly.hwpx')
+            if not os.path.exists(tmpl_src):
+                tmpl_src = os.path.join(sys._MEIPASS, 'template_weekly.hwpx')
+        else:
+            tmpl_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template_weekly.hwpx')
+
+        if not os.path.exists(tmpl_src):
+            messagebox.showerror("오류", "template_weekly.hwpx 파일을 찾을 수 없습니다.")
+            return
+
+        # 날짜 범위의 로그 수집
+        proj_descs = OrderedDict()  # {project: [desc, ...]} 중복 없이
+        log_dir = os.path.dirname(self.get_today_filename())
+        cur = start_date
+        while cur <= end_date:
+            log_file = os.path.join(log_dir, cur.strftime("%Y-%m-%d") + ".csv")
+            if os.path.exists(log_file):
+                with open(log_file, 'r', encoding='utf-8-sig', newline='') as f:
+                    for row in csv.reader(f):
+                        if len(row) < 3:
+                            continue
+                        proj_raw = row[2]
+                        desc = row[3].strip() if len(row) >= 4 else ''
+                        if proj_raw == '출근' or '퇴근' in proj_raw:
+                            continue
+                        # "피플카운터, 집합수요" 형태의 복합 프로젝트 분리
+                        projects = [p.strip() for p in proj_raw.split(',') if p.strip()] or ['']
+                        for proj in projects:
+                            if proj not in proj_descs:
+                                proj_descs[proj] = []
+                            if desc and desc not in proj_descs[proj]:
+                                proj_descs[proj].append(desc)
+            cur += timedelta(days=1)
+
+        if not proj_descs:
+            messagebox.showinfo("알림", "선택한 기간에 기록된 업무가 없습니다.")
+            return
+
+        # 최대 6행, 각 행: (project, aggregated_desc)
+        rows = []
+        for proj, descs in list(proj_descs.items())[:6]:
+            rows.append((proj, ', '.join(descs)))
+
+        friday_str = end_date.strftime("%m.%d")
+        out_dir = log_dir
+        date_suffix = datetime.now().strftime("%y_%m_%d")
+        out_file = os.path.join(out_dir, f"주간업무보고_{date_suffix}.hwpx")
+
+        try:
+            shutil.copy(tmpl_src, out_file)
+
+            date_str, tmpl_rows = _parse_weekly_template_rows(tmpl_src)
+
+            direct_map = {}
+            if date_str:
+                direct_map[date_str] = friday_str
+
+            # proj/desc 텍스트별 치환값 목록 수집 (중복 텍스트 → seq_map)
+            proj_vals = {}  # text -> [replacement, ...]
+            desc_vals = {}
+
+            for i, (proj_texts, desc_texts) in enumerate(tmpl_rows):
+                log_proj = rows[i][0] if i < len(rows) else ''
+                log_desc = rows[i][1] if i < len(rows) else ''
+                for j, t in enumerate(proj_texts):
+                    proj_vals.setdefault(t, []).append(log_proj if j == 0 else '')
+                for j, t in enumerate(desc_texts):
+                    desc_vals.setdefault(t, []).append(log_desc if j == 0 else '')
+
+            seq_map = {}
+            for vals_dict in (proj_vals, desc_vals):
+                for t, vals in vals_dict.items():
+                    if len(vals) == 1 or len(set(vals)) == 1:
+                        direct_map[t] = vals[0]
+                    else:
+                        seq_map[t] = vals
+
+            _zip_replace_atomic(out_file, direct_map, seq_map)
+
+            os.startfile(out_file)
+            messagebox.showinfo("완료", f"주간보고가 생성됐습니다.\n{os.path.basename(out_file)}")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"주간보고 생성 실패:\n{e}")
 
 
 if __name__ == '__main__':
