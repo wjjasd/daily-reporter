@@ -5,9 +5,9 @@ import os
 import re
 import csv
 import io
+import base64
 import json
 import zipfile
-import shutil
 import winreg
 from collections import OrderedDict
 from datetime import datetime, timedelta
@@ -15,110 +15,11 @@ import threading
 import time
 import winsound
 
-ALARM_INTERVAL_SECONDS = 3600
-
-_TMPL_TIMES = [
-    "09:00~10:00", "10:00~11:00", "11:00~12:00",
-    "12:00~13:00", "13:00~14:00", "14:00~15:00",
-    "15:00~16:00", "16:00~17:00", "17:00~18:00",
-]
-
-
-
-
-def _zip_replace_atomic(path, direct_map, seq_map):
-    """모든 치환을 단일 XML 패스에서 원자적으로 수행. 치환값이 다른 플레이스홀더를 포함해도 안전."""
-    # ASCII 전용 마커: XML 1.0 안전, 한글 HWPX 문서에 절대 등장하지 않는 패턴
-    cnt = [0]
-    def mk():
-        cnt[0] += 1
-        return f"XWKRX{cnt[0]:06d}X"
-
-    d_markers = {old: mk() for old in direct_map}
-    s_markers = {old: [mk() for _ in new_list] for old, new_list in seq_map.items()}
-
-    final = {}
-    for old, m in d_markers.items():
-        final[m] = direct_map[old]
-    for old, ms in s_markers.items():
-        for m, val in zip(ms, seq_map[old]):
-            final[m] = val
-
-    tmp = path + ".tmp"
-    with zipfile.ZipFile(path, "r") as zin:
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = zin.read(item.filename)
-                if "section" in item.filename and item.filename.endswith(".xml"):
-                    text = data.decode("utf-8")
-                    # 1패스: 모든 원본 텍스트를 마커로 교체
-                    for old, m in d_markers.items():
-                        text = text.replace(old, m)
-                    for old, ms in s_markers.items():
-                        for m in ms:
-                            text = text.replace(old, m, 1)
-                    # 2패스: 마커를 최종 값으로 교체
-                    for m, val in final.items():
-                        text = text.replace(m, val)
-                    data = text.encode("utf-8")
-                zout.writestr(item, data)
-    os.replace(tmp, path)
-
-def _xml_escape(text):
-    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-
-
-def _fill_empty_runs(xml_fragment, texts):
-    """row_frag 내의 self-closing <hp:run .../> 에 texts[0], texts[1], ... 순서로 삽입."""
-    count = [0]
-    def replacer(m):
-        idx = count[0]
-        count[0] += 1
-        if idx < len(texts) and texts[idx]:
-            ref = re.search(r'charPrIDRef="\d+"', m.group()).group()
-            return f'<hp:run {ref}><hp:t>{_xml_escape(texts[idx])}</hp:t></hp:run>'
-        return m.group()
-    return re.sub(r'<hp:run\s+charPrIDRef="\d+"[^>]*/>', replacer, xml_fragment)
-
-
-def _parse_weekly_template_rows(tmpl_src):
-    """
-    주간 템플릿 XML에서 전주 데이터 행의 (proj_texts, desc_texts)를 동적 추출.
-    col0=프로젝트, col1=업무내용, col3=날짜(MM.DD) 인 행을 데이터 행으로 인식.
-    Returns (date_str, data_rows) where data_rows = [(proj_texts, desc_texts), ...]
-    """
-    with zipfile.ZipFile(tmpl_src, 'r') as z:
-        xml = z.read('Contents/section0.xml').decode('utf-8')
-
-    trs = list(re.finditer(r'<hp:tr\b', xml))
-    date_str = ''
-    data_rows = []
-
-    for idx, tr_match in enumerate(trs):
-        start = tr_match.start()
-        end = trs[idx + 1].start() if idx + 1 < len(trs) else len(xml)
-        row_xml = xml[start:end]
-
-        cell_texts = {}
-        for cell_match in re.finditer(r'<hp:tc\b.*?(?=<hp:tc\b|</hp:tr>)', row_xml, re.DOTALL):
-            cell_xml = cell_match.group()
-            col_m = re.search(r'colAddr="(\d+)"', cell_xml)
-            if not col_m:
-                continue
-            col = int(col_m.group(1))
-            texts = [t for t in re.findall(r'<hp:t[^>]*>([^<]*)<', cell_xml) if t.strip()]
-            if texts:
-                cell_texts[col] = texts
-
-        if 0 in cell_texts and 3 in cell_texts:
-            date_val = cell_texts[3][0]
-            if re.match(r'\d{2}\.\d{2}', date_val):
-                if not date_str:
-                    date_str = date_val
-                data_rows.append((cell_texts[0], cell_texts.get(1, [])))
-
-    return date_str, data_rows
-
+from _templates import (
+    _TMPL_TIMES, _TMPL_REPORTER_PLACEHOLDER,
+    _TMPL_DAILY_B64, _TMPL_WEEKLY_B64,
+    _zip_replace_atomic, _fill_empty_runs, _parse_weekly_template_rows,
+)
 
 class DailyReporter:
     def __init__(self, root):
@@ -173,6 +74,15 @@ class DailyReporter:
             label="시작 시 출근 상태 자동 복원",
             variable=self.auto_resume_var,
             command=lambda: self._save_config('auto_resume', self.auto_resume_var.get())
+        )
+        settings_dropdown.add_separator()
+        settings_dropdown.add_command(
+            label="알림 주기 설정...",
+            command=self._show_interval_dialog
+        )
+        settings_dropdown.add_command(
+            label="보고자 성명 설정...",
+            command=self._show_name_dialog
         )
 
         def show_settings(event=None):
@@ -300,6 +210,74 @@ class DailyReporter:
         self.root.after(200, self._try_auto_resume)
 
     # ── 설정 저장/로드 ────────────────────────────────────────────
+    def _show_interval_dialog(self):
+        current = self._load_config().get('alarm_interval_minutes', 60)
+        popup = tk.Toplevel(self.root)
+        popup.title("알림 주기 설정")
+        popup.geometry("260x120")
+        popup.resizable(False, False)
+        popup.configure(bg="#f5f5f5")
+        popup.grab_set()
+
+        tk.Label(popup, text="알림 주기 (분, 예: 1, 30, 60)", bg="#f5f5f5",
+                 font=("Segoe UI", 9)).pack(pady=(16, 4))
+        interval_var = tk.StringVar(value=str(current))
+        entry = tk.Entry(popup, textvariable=interval_var, font=("Segoe UI", 11),
+                         width=10, justify="center")
+        entry.pack()
+        entry.select_range(0, 'end')
+        entry.focus_set()
+
+        def on_confirm(_event=None):
+            try:
+                minutes = int(interval_var.get().strip())
+                if minutes < 1:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("오류", "1 이상의 정수를 입력하세요.", parent=popup)
+                return
+            self._save_config('alarm_interval_minutes', minutes)
+            popup.destroy()
+
+        popup.bind("<Return>", on_confirm)
+        tk.Button(popup, text="확인", command=on_confirm,
+                  font=("Segoe UI", 10, "bold"),
+                  bg="#1a6bbf", fg="white",
+                  activebackground="#155a99", activeforeground="white",
+                  relief="flat", cursor="hand2", padx=12, pady=3
+                  ).pack(pady=(10, 0))
+
+    def _show_name_dialog(self):
+        current = self._load_config().get('reporter_name', '')
+        popup = tk.Toplevel(self.root)
+        popup.title("보고자 성명 설정")
+        popup.geometry("260x120")
+        popup.resizable(False, False)
+        popup.configure(bg="#f5f5f5")
+        popup.grab_set()
+
+        tk.Label(popup, text="이름 (예: 홍길동)", bg="#f5f5f5",
+                 font=("Segoe UI", 9)).pack(pady=(16, 4))
+        name_var = tk.StringVar(value=current)
+        entry = tk.Entry(popup, textvariable=name_var, font=("Segoe UI", 11),
+                         width=20, justify="center")
+        entry.pack()
+        entry.select_range(0, 'end')
+        entry.focus_set()
+
+        def on_confirm(_event=None):
+            name = name_var.get().strip()
+            self._save_config('reporter_name', name)
+            popup.destroy()
+
+        popup.bind("<Return>", on_confirm)
+        tk.Button(popup, text="확인", command=on_confirm,
+                  font=("Segoe UI", 10, "bold"),
+                  bg="#1a6bbf", fg="white",
+                  activebackground="#155a99", activeforeground="white",
+                  relief="flat", cursor="hand2", padx=12, pady=3
+                  ).pack(pady=(10, 0))
+
     def _config_path(self):
         if hasattr(sys, '_MEIPASS'):
             d = os.path.dirname(sys.executable)
@@ -514,9 +492,10 @@ class DailyReporter:
     # ── 정시 알람 팝업 ───────────────────────────────────────────
     def hourly_alarm(self):
         while self.alarm_running:
+            interval = self._load_config().get('alarm_interval_minutes', 60) * 60
             now = datetime.now()
-            next_mark = now + timedelta(seconds=ALARM_INTERVAL_SECONDS)
-            if ALARM_INTERVAL_SECONDS >= 3600:
+            next_mark = now + timedelta(seconds=interval)
+            if interval >= 3600:
                 next_mark = next_mark.replace(minute=0, second=0, microsecond=0)
             else:
                 next_mark = next_mark.replace(second=0, microsecond=0)
@@ -663,25 +642,14 @@ class DailyReporter:
             h = int((co - ci).total_seconds() // 3600)
             work_hours_str = f" {h}시간"
 
-        if hasattr(sys, '_MEIPASS'):
-            exe_dir = os.path.dirname(sys.executable)
-            tmpl_src = os.path.join(exe_dir, 'template.hwpx')
-            if not os.path.exists(tmpl_src):
-                tmpl_src = os.path.join(sys._MEIPASS, 'template.hwpx')
-        else:
-            tmpl_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template.hwpx')
-
-        if not os.path.exists(tmpl_src):
-            messagebox.showerror("오류", "template.hwpx 파일을 찾을 수 없습니다.")
-            return
-
         out_dir = os.path.dirname(log_file)
         date_suffix = d.strftime("%y_%m_%d")
         out_file = os.path.join(out_dir, f"일일업무보고_{date_suffix}.hwpx")
 
         try:
             # 템플릿 XML을 메모리에서 수정 후 한 번에 기록
-            with zipfile.ZipFile(tmpl_src, 'r') as zin:
+            tmpl_bytes = base64.b64decode(_TMPL_DAILY_B64)
+            with zipfile.ZipFile(io.BytesIO(tmpl_bytes), 'r') as zin:
                 entries = [(item, zin.read(item.filename)) for item in zin.infolist()]
 
             section_idx = next(
@@ -707,9 +675,13 @@ class DailyReporter:
             if work_hours_str:
                 xml = re.sub(r' *\d+시간', work_hours_str, xml, count=1)
 
+            reporter_name = self._load_config().get('reporter_name', '홍길동') or '홍길동'
+            xml = xml.replace(_TMPL_REPORTER_PLACEHOLDER, reporter_name)
+
             # 2. 시간 슬롯별: 시간 텍스트 교체 + 프로젝트·업무내용 삽입
+            prev_end = 0
             for i, slot in enumerate(_TMPL_TIMES):
-                slot_pos = xml.find(slot)
+                slot_pos = xml.find(slot, prev_end)  # 이미 처리된 구간 재탐색 방지
                 if slot_pos == -1:
                     continue
                 next_pos = len(xml)
@@ -723,7 +695,10 @@ class DailyReporter:
                     time_range, proj, desc = log_rows[i]
                     row_frag = row_frag.replace(slot, time_range, 1)
                     row_frag = _fill_empty_runs(row_frag, [proj, desc])
+                else:
+                    row_frag = row_frag.replace(slot, '', 1)
                 xml = xml[:slot_pos] + row_frag + xml[next_pos:]
+                prev_end = slot_pos + len(row_frag)
 
             # 수정된 XML을 출력 파일에 단일 패스로 기록
             with zipfile.ZipFile(out_file, 'w', zipfile.ZIP_DEFLATED) as zout:
@@ -784,18 +759,6 @@ class DailyReporter:
         start_entry.focus_set()
 
     def generate_weekly_report(self, start_date, end_date):
-        if hasattr(sys, '_MEIPASS'):
-            exe_dir = os.path.dirname(sys.executable)
-            tmpl_src = os.path.join(exe_dir, 'template_weekly.hwpx')
-            if not os.path.exists(tmpl_src):
-                tmpl_src = os.path.join(sys._MEIPASS, 'template_weekly.hwpx')
-        else:
-            tmpl_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template_weekly.hwpx')
-
-        if not os.path.exists(tmpl_src):
-            messagebox.showerror("오류", "template_weekly.hwpx 파일을 찾을 수 없습니다.")
-            return
-
         # 날짜 범위의 로그 수집
         proj_descs = OrderedDict()  # {project: [desc, ...]} 중복 없이
         log_dir = os.path.dirname(self.get_today_filename())
@@ -835,11 +798,14 @@ class DailyReporter:
         out_file = os.path.join(out_dir, f"주간업무보고_{date_suffix}.hwpx")
 
         try:
-            shutil.copy(tmpl_src, out_file)
+            tmpl_bytes = base64.b64decode(_TMPL_WEEKLY_B64)
+            with open(out_file, 'wb') as f:
+                f.write(tmpl_bytes)
 
-            date_str, tmpl_rows = _parse_weekly_template_rows(tmpl_src)
+            date_str, tmpl_rows = _parse_weekly_template_rows(tmpl_bytes)
 
-            direct_map = {}
+            reporter_name = self._load_config().get('reporter_name', '홍길동') or '홍길동'
+            direct_map = {_TMPL_REPORTER_PLACEHOLDER: reporter_name}
             if date_str:
                 direct_map[date_str] = friday_str
 
