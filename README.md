@@ -82,19 +82,70 @@ pyinstaller daily_reporter.spec
 
 ## 기여 방법
 
-1. 이 레포를 **Fork**
-2. 기능 브랜치 생성 (`git checkout -b feat/기능명`)
-3. 변경 후 커밋 — [Conventional Commits](https://www.conventionalcommits.org/) 형식 권장
-   ```
-   feat: 새 기능 설명
-   fix: 버그 수정 설명
-   docs: 문서 변경
-   ```
-4. Fork한 레포에 push (`git push origin feat/기능명`)
-5. 원본 레포로 **Pull Request** 생성
+버그 리포트, 기능 제안, 코드 기여 모두 환영합니다.
 
-> 템플릿을 수정하고 싶다면 `_templates.py`의 base64를 직접 편집하기보다,  
-> hwpx 파일을 수정 후 `create_worklog.py` 등을 활용해 재인코딩하는 것을 권장합니다.
+### 버그 리포트 / 기능 제안
+
+[Issues](../../issues) 탭에서 새 이슈를 열어 주세요.  
+버그의 경우 **재현 절차**, **기대 동작**, **실제 동작**, **OS 및 Python 버전**을 함께 적어 주시면 빠른 해결에 도움이 됩니다.
+
+### 코드 기여 절차
+
+1. 이 레포를 **Fork**
+2. 로컬에 클론 후 개발 환경 설정
+   ```bash
+   git clone https://github.com/<your-id>/DailyReporter.git
+   cd DailyReporter
+   pip install pyinstaller   # 빌드에만 필요
+   ```
+3. 기능/수정 단위로 브랜치 생성
+   ```bash
+   git checkout -b feat/기능명   # 새 기능
+   git checkout -b fix/버그명    # 버그 수정
+   ```
+4. 변경 사항 구현 및 동작 확인
+   ```bash
+   python daily_reporter.py   # 소스 직접 실행으로 빠르게 확인
+   ```
+5. 커밋 — [Conventional Commits](https://www.conventionalcommits.org/) 형식을 따릅니다
+
+   | 접두어 | 용도 |
+   |--------|------|
+   | `feat:` | 새 기능 추가 |
+   | `fix:` | 버그 수정 |
+   | `refactor:` | 동작 변경 없는 코드 개선 |
+   | `docs:` | 문서(README 등) 변경 |
+   | `chore:` | 빌드 스크립트, 의존성 등 기타 변경 |
+
+   ```bash
+   git commit -m "feat: 주간보고 기간 선택 UI 추가"
+   ```
+
+6. Fork한 레포에 push
+   ```bash
+   git push origin feat/기능명
+   ```
+7. 원본 레포로 **Pull Request** 생성 — PR 설명에 변경 이유와 테스트 방법을 간략히 적어 주세요
+
+### 템플릿(hwpx) 수정
+
+`_templates.py`의 base64 문자열을 직접 편집하면 hwpx 구조가 깨질 수 있습니다.  
+아래 순서를 권장합니다.
+
+1. 기존 EXE 또는 별도 도구로 hwpx 파일을 추출·수정
+2. 수정한 hwpx 파일을 base64로 인코딩하여 `_templates.py`에 반영  
+   ```python
+   import base64, pathlib
+   data = pathlib.Path("template.hwpx").read_bytes()
+   print(base64.b64encode(data).decode())
+   ```
+3. `python daily_reporter.py`로 보고서 생성 결과 확인 후 PR 제출
+
+### 코드 스타일
+
+- 들여쓰기: 공백 4칸
+- 문자열: 작은따옴표 (`'`) 기본
+- 별도 린터 설정은 없으나, 기존 코드의 스타일을 따라 주세요
 
 ---
 
