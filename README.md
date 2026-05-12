@@ -132,4 +132,22 @@ pyinstaller daily_reporter.spec
 
 ---
 
+## 기여 방법
+
+1. 이 레포를 **Fork**
+2. 기능 브랜치 생성 (`git checkout -b feat/기능명`)
+3. 변경 후 커밋 — [Conventional Commits](https://www.conventionalcommits.org/) 형식 권장
+   ```
+   feat: 새 기능 설명
+   fix: 버그 수정 설명
+   docs: 문서 변경
+   ```
+4. Fork한 레포에 push (`git push origin feat/기능명`)
+5. 원본 레포로 **Pull Request** 생성
+
+> 템플릿을 수정하고 싶다면 `_templates.py`의 base64를 직접 편집하기보다,  
+> hwpx 파일을 수정 후 `create_worklog.py` 등을 활용해 재인코딩하는 것을 권장합니다.
+
+---
+
 @ 2026 Made by YKJ
