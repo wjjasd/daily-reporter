@@ -820,8 +820,8 @@ class DailyReporter:
             work_hours_str = f" {h}시간"
 
         out_dir = self._get_daily_report_dir()
-        date_suffix = d.strftime("%y_%m_%d")
-        out_file = os.path.join(out_dir, f"일일업무보고_{date_suffix}.hwpx")
+        date_suffix = d.strftime("%y%m%d")
+        out_file = os.path.join(out_dir, f"유타렉스_일일업무보고_{date_suffix}.hwpx")
 
         try:
             # 템플릿 XML을 메모리에서 수정 후 한 번에 기록
@@ -971,8 +971,8 @@ class DailyReporter:
 
         friday_str = end_date.strftime("%m.%d")
         out_dir = self._get_weekly_report_dir()
-        date_suffix = datetime.now().strftime("%y_%m_%d")
-        out_file = os.path.join(out_dir, f"주간업무보고_{date_suffix}.hwpx")
+        date_suffix = datetime.now().strftime("%y%m%d")
+        out_file = os.path.join(out_dir, f"유타렉스_주간업무보고_{date_suffix}.hwpx")
 
         try:
             tmpl_bytes = base64.b64decode(_TMPL_WEEKLY_B64)
