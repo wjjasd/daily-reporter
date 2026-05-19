@@ -293,6 +293,41 @@ class DailyReporter:
         name_entry.pack(anchor="w", padx=20, pady=(2, 0))
         name_entry.bind("<MouseWheel>", on_mousewheel)
 
+        # ── 저장 경로 섹션 ──────────────────────────────────────
+        divider()
+        section_label("저장 경로")
+        tk.Label(frame, text="비워두면 exe 위치에 저장",
+                 font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20)
+
+        def path_picker(label_text, config_key):
+            tk.Label(frame, text=label_text, font=("Segoe UI", 10),
+                     bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20, pady=(8, 0))
+            var = tk.StringVar(value=config.get(config_key, '') or self._get_exe_dir())
+            row = tk.Frame(frame, bg="#f5f5f5")
+            row.pack(anchor="w", padx=20, pady=(2, 0), fill="x")
+            entry = tk.Entry(row, textvariable=var, font=("Segoe UI", 9),
+                             width=28, relief="solid", bd=1)
+            entry.pack(side="left", padx=(0, 4))
+
+            def browse(v=var):
+                from tkinter import filedialog
+                d = filedialog.askdirectory(parent=win, title=f"{label_text} 선택",
+                                            initialdir=v.get())
+                if d:
+                    v.set(os.path.normpath(d))
+
+            tk.Button(row, text="찾아보기", command=browse,
+                      font=("Segoe UI", 9), bg="#e0e0e0", fg="#555555",
+                      activebackground="#cccccc", activeforeground="#333333",
+                      relief="flat", cursor="hand2", pady=3).pack(side="left")
+            for w in (row, entry):
+                w.bind("<MouseWheel>", on_mousewheel)
+            return var
+
+        log_dir_var = path_picker("로그 파일 저장 경로", "log_dir")
+        daily_dir_var = path_picker("일일업무보고 저장 경로", "daily_report_dir")
+        weekly_dir_var = path_picker("주간업무보고 저장 경로", "weekly_report_dir")
+
         # ── 저장 버튼 ────────────────────────────────────────────
         divider()
 
@@ -330,12 +365,28 @@ class DailyReporter:
                         "예: 12:00 ~ 13:00", parent=win)
                     return
 
+            exe_dir = self._get_exe_dir()
+            dir_fields = [
+                ('log_dir', log_dir_var, "로그 파일 저장 경로"),
+                ('daily_report_dir', daily_dir_var, "일일업무보고 저장 경로"),
+                ('weekly_report_dir', weekly_dir_var, "주간업무보고 저장 경로"),
+            ]
+            for key, var, label in dir_fields:
+                d = var.get().strip()
+                if d and d != exe_dir and not os.path.isdir(d):
+                    messagebox.showerror("오류",
+                        f"[{label}] 경로가 존재하지 않습니다:\n{d}", parent=win)
+                    return
+
             cfg['auto_fill'] = auto_fill_var.get()
             cfg['auto_resume'] = auto_resume_var.get()
             cfg['alarm_minute'] = alarm_minute
             cfg['lunch_start'] = lunch_start
             cfg['lunch_end'] = lunch_end
             cfg['reporter_name'] = name_var.get().strip()
+            for key, var, _ in dir_fields:
+                d = var.get().strip()
+                cfg[key] = '' if (not d or d == exe_dir) else d
             try:
                 with open(self._config_path(), 'w', encoding='utf-8') as f:
                     json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -364,11 +415,7 @@ class DailyReporter:
                   width=10, pady=5).pack(side="left")
 
     def _config_path(self):
-        if hasattr(sys, '_MEIPASS'):
-            d = os.path.dirname(sys.executable)
-        else:
-            d = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(d, 'config.json')
+        return os.path.join(self._get_exe_dir(), 'config.json')
 
     def _load_config(self):
         try:
@@ -428,13 +475,29 @@ class DailyReporter:
             self.autostart_var.set(not self.autostart_var.get())
 
     # ── 로그 파일 ────────────────────────────────────────────────
+    def _get_exe_dir(self):
+        if hasattr(sys, '_MEIPASS'):
+            return os.path.dirname(sys.executable)
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _resolve_dir(self, config_key):
+        d = self._load_config().get(config_key, '').strip()
+        if d and os.path.isdir(d):
+            return d
+        return self._get_exe_dir()
+
+    def _get_log_dir(self):
+        return self._resolve_dir('log_dir')
+
+    def _get_daily_report_dir(self):
+        return self._resolve_dir('daily_report_dir')
+
+    def _get_weekly_report_dir(self):
+        return self._resolve_dir('weekly_report_dir')
+
     def get_today_filename(self):
         today = datetime.now().strftime("%Y-%m-%d")
-        if hasattr(sys, '_MEIPASS'):
-            exec_dir = os.path.dirname(sys.executable)
-        else:
-            exec_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(exec_dir, f"{today}.csv")
+        return os.path.join(self._get_log_dir(), f"{today}.csv")
 
     def _parse_csv_line(self, line):
         """CSV 한 줄을 (date, time, project, desc) 로 파싱. 실패 시 None."""
@@ -756,7 +819,7 @@ class DailyReporter:
             h = int((co - ci).total_seconds() // 3600)
             work_hours_str = f" {h}시간"
 
-        out_dir = os.path.dirname(log_file)
+        out_dir = self._get_daily_report_dir()
         date_suffix = d.strftime("%y_%m_%d")
         out_file = os.path.join(out_dir, f"일일업무보고_{date_suffix}.hwpx")
 
@@ -907,7 +970,7 @@ class DailyReporter:
             rows.append((proj, ', '.join(descs)))
 
         friday_str = end_date.strftime("%m.%d")
-        out_dir = log_dir
+        out_dir = self._get_weekly_report_dir()
         date_suffix = datetime.now().strftime("%y_%m_%d")
         out_file = os.path.join(out_dir, f"주간업무보고_{date_suffix}.hwpx")
 
