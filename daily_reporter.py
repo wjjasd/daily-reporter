@@ -182,7 +182,7 @@ class DailyReporter:
 
         win = tk.Toplevel(self.root)
         win.title("설정")
-        win.geometry("300x380")
+        win.geometry("300x440")
         win.resizable(False, False)
         win.configure(bg="#f5f5f5")
         win.grab_set()
@@ -256,6 +256,31 @@ class DailyReporter:
         interval_entry.pack(anchor="w", padx=20, pady=(2, 0))
         interval_entry.bind("<MouseWheel>", on_mousewheel)
 
+        # ── 점심 시간 섹션 ──────────────────────────────────────
+        divider()
+        section_label("점심 시간")
+        tk.Label(frame, text="해당 시간대 알림은 팝업 없이 '점심 시간'으로 자동 기록\n(비워두면 미사용)",
+                 font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa",
+                 justify="left").pack(anchor="w", padx=20)
+        lunch_row = tk.Frame(frame, bg="#f5f5f5")
+        lunch_row.pack(anchor="w", padx=20, pady=(4, 0))
+        tk.Label(lunch_row, text="시작", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(side="left")
+        lunch_start_var = tk.StringVar(value=config.get('lunch_start', ''))
+        lunch_start_entry = tk.Entry(lunch_row, textvariable=lunch_start_var,
+                                     font=("Segoe UI", 10), width=7,
+                                     justify="center", relief="solid", bd=1)
+        lunch_start_entry.pack(side="left", padx=(4, 10))
+        tk.Label(lunch_row, text="종료", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(side="left")
+        lunch_end_var = tk.StringVar(value=config.get('lunch_end', ''))
+        lunch_end_entry = tk.Entry(lunch_row, textvariable=lunch_end_var,
+                                   font=("Segoe UI", 10), width=7,
+                                   justify="center", relief="solid", bd=1)
+        lunch_end_entry.pack(side="left", padx=(4, 0))
+        for w in (lunch_row, lunch_start_entry, lunch_end_entry):
+            w.bind("<MouseWheel>", on_mousewheel)
+
         # ── 보고서 섹션 ──────────────────────────────────────────
         divider()
         section_label("보고서")
@@ -288,9 +313,28 @@ class DailyReporter:
             self.auto_resume_var.set(auto_resume_var.get())
 
             cfg = self._load_config()
+            lunch_start = lunch_start_var.get().strip()
+            lunch_end = lunch_end_var.get().strip()
+            if lunch_start or lunch_end:
+                try:
+                    if not lunch_start or not lunch_end:
+                        raise ValueError
+                    s = datetime.strptime(lunch_start, "%H:%M")
+                    e = datetime.strptime(lunch_end, "%H:%M")
+                    if s >= e:
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror("오류",
+                        "점심 시간 형식이 올바르지 않습니다.\n"
+                        "HH:MM 형식으로 입력하고 시작 < 종료여야 합니다.\n"
+                        "예: 12:00 ~ 13:00", parent=win)
+                    return
+
             cfg['auto_fill'] = auto_fill_var.get()
             cfg['auto_resume'] = auto_resume_var.get()
             cfg['alarm_minute'] = alarm_minute
+            cfg['lunch_start'] = lunch_start
+            cfg['lunch_end'] = lunch_end
             cfg['reporter_name'] = name_var.get().strip()
             try:
                 with open(self._config_path(), 'w', encoding='utf-8') as f:
@@ -332,6 +376,21 @@ class DailyReporter:
                 return json.load(f)
         except Exception:
             return {}
+
+    def _is_lunch_time(self, dt):
+        config = self._load_config()
+        lunch_start = config.get('lunch_start', '').strip()
+        lunch_end = config.get('lunch_end', '').strip()
+        if not lunch_start or not lunch_end:
+            return False
+        try:
+            s_hour, s_min = map(int, lunch_start.split(':'))
+            e_hour, e_min = map(int, lunch_end.split(':'))
+            start = dt.replace(hour=s_hour, minute=s_min, second=0, microsecond=0)
+            end = dt.replace(hour=e_hour, minute=e_min, second=0, microsecond=0)
+            return start <= dt < end
+        except (ValueError, AttributeError):
+            return False
 
     def _save_config(self, key, value):
         config = self._load_config()
@@ -469,7 +528,7 @@ class DailyReporter:
             if not parsed:
                 continue
             _, _, proj, desc = parsed
-            if proj == '출근' or '퇴근' in proj:
+            if proj == '출근' or '퇴근' in proj or proj == '점심 시간':
                 continue
             return proj, desc
         return '', ''
@@ -556,7 +615,10 @@ class DailyReporter:
                 time.sleep(min(10, remaining))
 
             if self.alarm_running:
-                self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
+                if self._is_lunch_time(next_mark):
+                    self.root.after(0, lambda: self.write_log("점심 시간"))
+                else:
+                    self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
 
     def show_alarm_popup(self, current_time=None):
         if current_time is None:
