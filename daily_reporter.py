@@ -173,6 +173,8 @@ class DailyReporter:
 
         self.poll_log_file()
         self.root.after(200, self._try_auto_resume)
+        if not self._load_config().get('reporter_name', '').strip():
+            self.root.after(300, self._show_settings_window)
 
     # ── 설정 저장/로드 ────────────────────────────────────────────
     def _show_settings_window(self):
