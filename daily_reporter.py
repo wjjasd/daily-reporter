@@ -281,6 +281,68 @@ class DailyReporter:
         for w in (lunch_row, lunch_start_entry, lunch_end_entry):
             w.bind("<MouseWheel>", on_mousewheel)
 
+        # ── 근무 시간대 섹션 ────────────────────────────────────────
+        divider()
+        section_label("근무 시간대")
+
+        _PRESETS = [
+            ('9-6',  '09:00', '18:00', '9-6  (09:00 ~ 18:00)'),
+            ('10-7', '10:00', '19:00', '10-7  (10:00 ~ 19:00)'),
+        ]
+        work_start_cfg = config.get('work_start', '')
+        work_end_cfg = config.get('work_end', '')
+        _preset_key = next(
+            (k for k, s, e, _ in _PRESETS if s == work_start_cfg and e == work_end_cfg),
+            '직접 입력'
+        )
+        work_preset_var = tk.StringVar(value=_preset_key)
+
+        for key, _, _, label in _PRESETS:
+            rb = tk.Radiobutton(frame, text=label, variable=work_preset_var, value=key,
+                                font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
+                                activebackground="#f5f5f5", selectcolor="#f5f5f5")
+            rb.pack(anchor="w", padx=20)
+            rb.bind("<MouseWheel>", on_mousewheel)
+
+        custom_rb = tk.Radiobutton(frame, text="직접 입력", variable=work_preset_var, value='직접 입력',
+                                   font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
+                                   activebackground="#f5f5f5", selectcolor="#f5f5f5")
+        custom_rb.pack(anchor="w", padx=20)
+        custom_rb.bind("<MouseWheel>", on_mousewheel)
+
+        custom_hint = tk.Label(frame, text="예: 09:00 ~ 19:00  (HH:MM 형식)",
+                               font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa")
+        custom_hint.pack(anchor="w", padx=40)
+
+        work_custom_row = tk.Frame(frame, bg="#f5f5f5")
+        work_custom_row.pack(anchor="w", padx=40, pady=(2, 0))
+        tk.Label(work_custom_row, text="시작", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(side="left")
+        work_start_var = tk.StringVar(value=work_start_cfg if _preset_key == '직접 입력' else '')
+        work_start_entry = tk.Entry(work_custom_row, textvariable=work_start_var,
+                                    font=("Segoe UI", 10), width=7,
+                                    justify="center", relief="solid", bd=1)
+        work_start_entry.pack(side="left", padx=(4, 10))
+        tk.Label(work_custom_row, text="종료", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(side="left")
+        work_end_var = tk.StringVar(value=work_end_cfg if _preset_key == '직접 입력' else '')
+        work_end_entry = tk.Entry(work_custom_row, textvariable=work_end_var,
+                                  font=("Segoe UI", 10), width=7,
+                                  justify="center", relief="solid", bd=1)
+        work_end_entry.pack(side="left", padx=(4, 0))
+
+        for w in (work_custom_row, work_start_entry, work_end_entry):
+            w.bind("<MouseWheel>", on_mousewheel)
+
+        def _update_work_custom(*_):
+            is_custom = work_preset_var.get() == '직접 입력'
+            custom_hint.config(fg="#aaaaaa" if is_custom else "#cccccc")
+            work_start_entry.config(state="normal" if is_custom else "disabled")
+            work_end_entry.config(state="normal" if is_custom else "disabled")
+
+        work_preset_var.trace_add('write', _update_work_custom)
+        _update_work_custom()
+
         # ── 보고서 섹션 ──────────────────────────────────────────
         divider()
         section_label("보고서")
@@ -378,11 +440,35 @@ class DailyReporter:
                         f"[{label}] 경로가 존재하지 않습니다:\n{d}", parent=win)
                     return
 
+            _PRESET_TIMES = {'9-6': ('09:00', '18:00'), '10-7': ('10:00', '19:00')}
+            preset = work_preset_var.get()
+            if preset in _PRESET_TIMES:
+                save_work_start, save_work_end = _PRESET_TIMES[preset]
+            else:
+                save_work_start = work_start_var.get().strip()
+                save_work_end = work_end_var.get().strip()
+                if save_work_start or save_work_end:
+                    try:
+                        if not save_work_start or not save_work_end:
+                            raise ValueError
+                        ws = datetime.strptime(save_work_start, "%H:%M")
+                        we = datetime.strptime(save_work_end, "%H:%M")
+                        if ws >= we:
+                            raise ValueError
+                    except ValueError:
+                        messagebox.showerror("오류",
+                            "근무 시간대 형식이 올바르지 않습니다.\n"
+                            "HH:MM 형식으로 입력하고 시작 < 종료여야 합니다.\n"
+                            "예: 09:00 ~ 19:00", parent=win)
+                        return
+
             cfg['auto_fill'] = auto_fill_var.get()
             cfg['auto_resume'] = auto_resume_var.get()
             cfg['alarm_minute'] = alarm_minute
             cfg['lunch_start'] = lunch_start
             cfg['lunch_end'] = lunch_end
+            cfg['work_start'] = save_work_start
+            cfg['work_end'] = save_work_end
             cfg['reporter_name'] = name_var.get().strip()
             for key, var, _ in dir_fields:
                 d = var.get().strip()
