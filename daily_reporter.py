@@ -54,48 +54,13 @@ class DailyReporter:
         self.auto_fill_var = tk.BooleanVar(value=config.get('auto_fill', True))
         self.auto_resume_var = tk.BooleanVar(value=config.get('auto_resume', True))
 
-        settings_dropdown = tk.Menu(
-            root, tearoff=0,
-            bg="#f5f5f5", fg="#333333",
-            activebackground="#e0e0e0", activeforeground="#333333",
-            relief="flat", bd=1
-        )
-        settings_dropdown.add_checkbutton(
-            label="윈도우 시작 시 자동 실행",
-            variable=self.autostart_var,
-            command=self.toggle_autostart
-        )
-        settings_dropdown.add_checkbutton(
-            label="이전 내용 자동 입력",
-            variable=self.auto_fill_var,
-            command=lambda: self._save_config('auto_fill', self.auto_fill_var.get())
-        )
-        settings_dropdown.add_checkbutton(
-            label="시작 시 출근 상태 자동 복원",
-            variable=self.auto_resume_var,
-            command=lambda: self._save_config('auto_resume', self.auto_resume_var.get())
-        )
-        settings_dropdown.add_separator()
-        settings_dropdown.add_command(
-            label="알림 주기 설정...",
-            command=self._show_interval_dialog
-        )
-        settings_dropdown.add_command(
-            label="보고자 성명 설정...",
-            command=self._show_name_dialog
-        )
-
-        def show_settings(event=None):
-            btn = settings_btn
-            settings_dropdown.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
-
         settings_btn = tk.Button(
             menubar_frame, text="설정",
             font=("Segoe UI", 9),
             bg="#f5f5f5", fg="#555555",
             activebackground="#e0e0e0", activeforeground="#333333",
             relief="flat", cursor="hand2", padx=8, pady=3, bd=0,
-            command=show_settings
+            command=self._show_settings_window
         )
         settings_btn.pack(side="left")
 
@@ -210,73 +175,134 @@ class DailyReporter:
         self.root.after(200, self._try_auto_resume)
 
     # ── 설정 저장/로드 ────────────────────────────────────────────
-    def _show_interval_dialog(self):
-        current = self._load_config().get('alarm_interval_minutes', 60)
-        popup = tk.Toplevel(self.root)
-        popup.title("알림 주기 설정")
-        popup.geometry("260x120")
-        popup.resizable(False, False)
-        popup.configure(bg="#f5f5f5")
-        popup.grab_set()
+    def _show_settings_window(self):
+        config = self._load_config()
 
-        tk.Label(popup, text="알림 주기 (분, 예: 1, 30, 60)", bg="#f5f5f5",
-                 font=("Segoe UI", 9)).pack(pady=(16, 4))
-        interval_var = tk.StringVar(value=str(current))
-        entry = tk.Entry(popup, textvariable=interval_var, font=("Segoe UI", 11),
-                         width=10, justify="center")
-        entry.pack()
-        entry.select_range(0, 'end')
-        entry.focus_set()
+        win = tk.Toplevel(self.root)
+        win.title("설정")
+        win.geometry("300x380")
+        win.resizable(False, False)
+        win.configure(bg="#f5f5f5")
+        win.grab_set()
 
-        def on_confirm(_event=None):
+        # 스크롤 가능한 캔버스
+        canvas = tk.Canvas(win, bg="#f5f5f5", highlightthickness=0)
+        scrollbar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        frame = tk.Frame(canvas, bg="#f5f5f5")
+        frame_id = canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        def on_frame_configure(_event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def on_canvas_configure(event):
+            canvas.itemconfig(frame_id, width=event.width)
+
+        frame.bind("<Configure>", on_frame_configure)
+        canvas.bind("<Configure>", on_canvas_configure)
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        frame.bind("<MouseWheel>", on_mousewheel)
+
+        # ── 헬퍼 ────────────────────────────────────────────────
+        def section_label(text):
+            tk.Label(frame, text=text, font=("Segoe UI", 8),
+                     bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20, pady=(16, 2))
+
+        def divider():
+            tk.Frame(frame, height=1, bg="#e0e0e0").pack(fill="x", padx=20, pady=(8, 0))
+
+        def checkbutton(text, var):
+            cb = tk.Checkbutton(frame, text=text, variable=var,
+                                font=("Segoe UI", 10),
+                                bg="#f5f5f5", fg="#333333",
+                                activebackground="#f5f5f5",
+                                selectcolor="#f5f5f5")
+            cb.pack(anchor="w", padx=16)
+            cb.bind("<MouseWheel>", on_mousewheel)
+
+        # ── 시스템 섹션 ──────────────────────────────────────────
+        section_label("시스템")
+        autostart_var = tk.BooleanVar(value=self.get_autostart())
+        checkbutton("윈도우 시작 시 자동 실행", autostart_var)
+
+        # ── 입력 섹션 ────────────────────────────────────────────
+        divider()
+        section_label("입력")
+        auto_fill_var = tk.BooleanVar(value=config.get('auto_fill', True))
+        checkbutton("이전 내용 자동 입력", auto_fill_var)
+        auto_resume_var = tk.BooleanVar(value=config.get('auto_resume', True))
+        checkbutton("시작 시 출근 상태 자동 복원", auto_resume_var)
+
+        # ── 알림 섹션 ────────────────────────────────────────────
+        divider()
+        section_label("알림")
+        tk.Label(frame, text="알림 주기 (분)", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20)
+        interval_var = tk.StringVar(value=str(config.get('alarm_interval_minutes', 60)))
+        interval_entry = tk.Entry(frame, textvariable=interval_var,
+                                  font=("Segoe UI", 10), width=10,
+                                  justify="center", relief="solid", bd=1)
+        interval_entry.pack(anchor="w", padx=20, pady=(2, 0))
+        interval_entry.bind("<MouseWheel>", on_mousewheel)
+
+        # ── 보고서 섹션 ──────────────────────────────────────────
+        divider()
+        section_label("보고서")
+        tk.Label(frame, text="보고자 성명", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20)
+        name_var = tk.StringVar(value=config.get('reporter_name', ''))
+        name_entry = tk.Entry(frame, textvariable=name_var,
+                              font=("Segoe UI", 10), width=20,
+                              relief="solid", bd=1)
+        name_entry.pack(anchor="w", padx=20, pady=(2, 0))
+        name_entry.bind("<MouseWheel>", on_mousewheel)
+
+        # ── 저장 버튼 ────────────────────────────────────────────
+        divider()
+
+        def on_save():
             try:
                 minutes = int(interval_var.get().strip())
                 if minutes < 1:
                     raise ValueError
             except ValueError:
-                messagebox.showerror("오류", "1 이상의 정수를 입력하세요.", parent=popup)
+                messagebox.showerror("오류", "알림 주기는 1 이상의 정수를 입력하세요.", parent=win)
                 return
-            self._save_config('alarm_interval_minutes', minutes)
-            popup.destroy()
 
-        popup.bind("<Return>", on_confirm)
-        tk.Button(popup, text="확인", command=on_confirm,
-                  font=("Segoe UI", 10, "bold"),
+            if autostart_var.get() != self.autostart_var.get():
+                self.autostart_var.set(autostart_var.get())
+                self.toggle_autostart()
+
+            self.auto_fill_var.set(auto_fill_var.get())
+            self.auto_resume_var.set(auto_resume_var.get())
+
+            cfg = self._load_config()
+            cfg['auto_fill'] = auto_fill_var.get()
+            cfg['auto_resume'] = auto_resume_var.get()
+            cfg['alarm_interval_minutes'] = minutes
+            cfg['reporter_name'] = name_var.get().strip()
+            try:
+                with open(self._config_path(), 'w', encoding='utf-8') as f:
+                    json.dump(cfg, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                messagebox.showerror("오류", f"설정 저장 실패:\n{e}", parent=win)
+                return
+
+            win.destroy()
+
+        tk.Button(frame, text="저장", command=on_save,
+                  font=("Segoe UI", 11, "bold"),
                   bg="#1a6bbf", fg="white",
                   activebackground="#155a99", activeforeground="white",
-                  relief="flat", cursor="hand2", padx=12, pady=3
-                  ).pack(pady=(10, 0))
-
-    def _show_name_dialog(self):
-        current = self._load_config().get('reporter_name', '')
-        popup = tk.Toplevel(self.root)
-        popup.title("보고자 성명 설정")
-        popup.geometry("260x120")
-        popup.resizable(False, False)
-        popup.configure(bg="#f5f5f5")
-        popup.grab_set()
-
-        tk.Label(popup, text="이름 (예: 홍길동)", bg="#f5f5f5",
-                 font=("Segoe UI", 9)).pack(pady=(16, 4))
-        name_var = tk.StringVar(value=current)
-        entry = tk.Entry(popup, textvariable=name_var, font=("Segoe UI", 11),
-                         width=20, justify="center")
-        entry.pack()
-        entry.select_range(0, 'end')
-        entry.focus_set()
-
-        def on_confirm(_event=None):
-            name = name_var.get().strip()
-            self._save_config('reporter_name', name)
-            popup.destroy()
-
-        popup.bind("<Return>", on_confirm)
-        tk.Button(popup, text="확인", command=on_confirm,
-                  font=("Segoe UI", 10, "bold"),
-                  bg="#1a6bbf", fg="white",
-                  activebackground="#155a99", activeforeground="white",
-                  relief="flat", cursor="hand2", padx=12, pady=3
-                  ).pack(pady=(10, 0))
+                  relief="flat", cursor="hand2",
+                  width=16, pady=6).pack(pady=(12, 20))
 
     def _config_path(self):
         if hasattr(sys, '_MEIPASS'):
