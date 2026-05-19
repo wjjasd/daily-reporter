@@ -511,9 +511,17 @@ class DailyReporter:
             pass
         return None
 
-    def _write_log_row(self, proj, desc):
+    def _round_alarm_log_time(self, alarm_minute, t):
+        if alarm_minute == 0 or alarm_minute == 30:
+            return t
+        elif 1 <= alarm_minute <= 29:
+            return t.replace(minute=0, second=0, microsecond=0)
+        else:
+            return t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+
+    def _write_log_row(self, proj, desc, dt=None):
         """CSV 행 한 줄을 파일에 append하고 raw 라인 문자열을 반환."""
-        now = datetime.now()
+        now = dt if dt is not None else datetime.now()
         filename = self.get_today_filename()
         buf = io.StringIO()
         csv.writer(buf).writerow([now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), proj, desc])
@@ -574,8 +582,8 @@ class DailyReporter:
         self.root.clipboard_clear()
         self.root.clipboard_append(content)
 
-    def write_log(self, text):
-        raw = self._write_log_row(text, "")
+    def write_log(self, text, dt=None):
+        raw = self._write_log_row(text, "", dt)
         self._last_log_raw = raw
         self.last_log_label.config(text=self._format_log_display(raw))
 
@@ -678,8 +686,9 @@ class DailyReporter:
                 time.sleep(min(10, remaining))
 
             if self.alarm_running:
+                log_time = self._round_alarm_log_time(alarm_minute, next_mark)
                 if self._is_lunch_time(next_mark):
-                    self.root.after(0, lambda: self.write_log("점심 시간"))
+                    self.root.after(0, lambda t=log_time: self.write_log("점심 시간", t))
                 else:
                     self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
 
@@ -693,12 +702,7 @@ class DailyReporter:
 
         # alarm_minute 기준으로 로그에 기록할 정각 시간 계산
         alarm_minute = self._load_config().get('alarm_minute', 0)
-        if alarm_minute == 0 or alarm_minute == 30:
-            log_time = current_time
-        elif 1 <= alarm_minute <= 29:
-            log_time = current_time.replace(minute=0, second=0, microsecond=0)
-        else:  # 31~59
-            log_time = current_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        log_time = self._round_alarm_log_time(alarm_minute, current_time)
 
         winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
 
