@@ -606,16 +606,25 @@ class DailyReporter:
             return t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
 
     def _next_alarm_mark(self, alarm_minute, now):
-        """다음 알람 시각 계산. work_start 설정 시 해당 시각을 기준으로 스케줄 고정."""
+        """다음 알람 시각 계산. work_start 설정 시 해당 시각을 기준으로 스케줄 고정.
+
+        alarm_minute < 30: 기록 시각이 현재 시 정각(내림)이므로
+                           첫 알람은 work_start 다음 시간대 (예: 5분, 9시 시작 → 10:05)
+        alarm_minute >= 30: 기록 시각이 다음 시 정각(올림) 또는 그대로이므로
+                            첫 알람은 work_start 시간대 (예: 50분, 9시 시작 → 09:50)
+        """
         work_start = self._load_config().get('work_start', '').strip()
         if work_start:
             try:
                 ws_hour = int(work_start.split(':')[0])
-                anchor = now.replace(hour=ws_hour, minute=alarm_minute, second=0, microsecond=0)
-                if anchor <= now:
-                    hours_to_add = int((now - anchor).total_seconds() // 3600) + 1
-                    return anchor + timedelta(hours=hours_to_add)
-                return anchor
+                if alarm_minute < 30:
+                    first_mark = now.replace(hour=ws_hour + 1, minute=alarm_minute, second=0, microsecond=0)
+                else:
+                    first_mark = now.replace(hour=ws_hour, minute=alarm_minute, second=0, microsecond=0)
+                if first_mark <= now:
+                    hours_to_add = int((now - first_mark).total_seconds() // 3600) + 1
+                    return first_mark + timedelta(hours=hours_to_add)
+                return first_mark
             except (ValueError, IndexError):
                 pass
         mark = now.replace(minute=alarm_minute, second=0, microsecond=0)
