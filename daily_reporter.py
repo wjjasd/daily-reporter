@@ -625,7 +625,7 @@ class DailyReporter:
         # 로그 순서대로 템플릿 행에 순차 배정
         log_rows = []  # (time_range, proj, desc)
         for i, (t, proj, desc) in enumerate(work_entries[:len(_TMPL_TIMES)]):
-            start = checkin_time if i == 0 else work_entries[i - 1][0]
+            start = "09:00:00" if i == 0 else work_entries[i - 1][0]
             log_rows.append((f"{(start or t)[:5]}~{t[:5]}", proj, desc))
 
         # 날짜는 로그 파일 기준
