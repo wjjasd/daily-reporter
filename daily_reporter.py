@@ -605,6 +605,24 @@ class DailyReporter:
         else:
             return t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
 
+    def _next_alarm_mark(self, alarm_minute, now):
+        """다음 알람 시각 계산. work_start 설정 시 해당 시각을 기준으로 스케줄 고정."""
+        work_start = self._load_config().get('work_start', '').strip()
+        if work_start:
+            try:
+                ws_hour = int(work_start.split(':')[0])
+                anchor = now.replace(hour=ws_hour, minute=alarm_minute, second=0, microsecond=0)
+                if anchor <= now:
+                    hours_to_add = int((now - anchor).total_seconds() // 3600) + 1
+                    return anchor + timedelta(hours=hours_to_add)
+                return anchor
+            except (ValueError, IndexError):
+                pass
+        mark = now.replace(minute=alarm_minute, second=0, microsecond=0)
+        if mark <= now:
+            mark += timedelta(hours=1)
+        return mark
+
     def _write_log_row(self, proj, desc, dt=None):
         """CSV 행 한 줄을 파일에 append하고 raw 라인 문자열을 반환."""
         now = dt if dt is not None else datetime.now()
@@ -770,9 +788,7 @@ class DailyReporter:
         while self.alarm_running:
             alarm_minute = self._load_config().get('alarm_minute', 0)
             now = datetime.now()
-            next_mark = now.replace(minute=alarm_minute, second=0, microsecond=0)
-            if next_mark <= now:
-                next_mark += timedelta(hours=1)
+            next_mark = self._next_alarm_mark(alarm_minute, now)
 
             # 10초마다 설정 변경 여부를 확인하며 대기
             while self.alarm_running:
@@ -782,10 +798,7 @@ class DailyReporter:
                 new_minute = self._load_config().get('alarm_minute', 0)
                 if new_minute != alarm_minute:
                     alarm_minute = new_minute
-                    candidate = now.replace(minute=alarm_minute, second=0, microsecond=0)
-                    if candidate <= now:
-                        candidate += timedelta(hours=1)
-                    next_mark = candidate
+                    next_mark = self._next_alarm_mark(alarm_minute, now)
                     continue
                 remaining = (next_mark - now).total_seconds()
                 time.sleep(min(10, remaining))
