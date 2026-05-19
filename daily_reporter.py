@@ -182,7 +182,7 @@ class DailyReporter:
 
         win = tk.Toplevel(self.root)
         win.title("설정")
-        win.geometry("300x440")
+        win.geometry("360x500")
         win.resizable(False, False)
         win.configure(bg="#f5f5f5")
         win.grab_set()
@@ -261,7 +261,7 @@ class DailyReporter:
         section_label("점심 시간")
         tk.Label(frame, text="해당 시간대 알림은 팝업 없이 '점심 시간'으로 자동 기록\n(비워두면 미사용)",
                  font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa",
-                 justify="left").pack(anchor="w", padx=20)
+                 justify="left", wraplength=310).pack(anchor="w", padx=20)
         lunch_row = tk.Frame(frame, bg="#f5f5f5")
         lunch_row.pack(anchor="w", padx=20, pady=(4, 0))
         tk.Label(lunch_row, text="시작", font=("Segoe UI", 10),
