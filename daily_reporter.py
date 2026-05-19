@@ -299,12 +299,23 @@ class DailyReporter:
 
             win.destroy()
 
-        tk.Button(frame, text="저장", command=on_save,
-                  font=("Segoe UI", 11, "bold"),
+        btn_row = tk.Frame(frame, bg="#f5f5f5")
+        btn_row.pack(pady=(12, 20))
+        btn_row.bind("<MouseWheel>", on_mousewheel)
+
+        tk.Button(btn_row, text="저장", command=on_save,
+                  font=("Segoe UI", 10, "bold"),
                   bg="#1a6bbf", fg="white",
                   activebackground="#155a99", activeforeground="white",
                   relief="flat", cursor="hand2",
-                  width=16, pady=6).pack(pady=(12, 20))
+                  width=10, pady=5).pack(side="left", padx=(0, 6))
+
+        tk.Button(btn_row, text="취소", command=win.destroy,
+                  font=("Segoe UI", 10),
+                  bg="#e0e0e0", fg="#555555",
+                  activebackground="#cccccc", activeforeground="#333333",
+                  relief="flat", cursor="hand2",
+                  width=10, pady=5).pack(side="left")
 
     def _config_path(self):
         if hasattr(sys, '_MEIPASS'):
