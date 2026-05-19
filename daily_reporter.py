@@ -582,8 +582,8 @@ class DailyReporter:
         self.root.clipboard_clear()
         self.root.clipboard_append(content)
 
-    def write_log(self, text, dt=None):
-        raw = self._write_log_row(text, "", dt)
+    def write_log(self, proj, desc="", dt=None):
+        raw = self._write_log_row(proj, desc, dt)
         self._last_log_raw = raw
         self.last_log_label.config(text=self._format_log_display(raw))
 
@@ -599,7 +599,7 @@ class DailyReporter:
             if not parsed:
                 continue
             _, _, proj, desc = parsed
-            if proj == '출근' or '퇴근' in proj or proj == '점심 시간':
+            if proj == '출근' or '퇴근' in proj or proj == '점심 시간' or desc == '점심 시간':
                 continue
             return proj, desc
         return '', ''
@@ -688,7 +688,7 @@ class DailyReporter:
             if self.alarm_running:
                 log_time = self._round_alarm_log_time(alarm_minute, next_mark)
                 if self._is_lunch_time(next_mark):
-                    self.root.after(0, lambda t=log_time: self.write_log("점심 시간", t))
+                    self.root.after(0, lambda t=log_time: self.write_log("", "점심 시간", t))
                 else:
                     self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
 
@@ -809,6 +809,8 @@ class DailyReporter:
                     checkin_time = t
                 elif '퇴근' in proj:
                     checkout_time = t
+                elif proj == '점심 시간' or desc == '점심 시간':
+                    pass
                 else:
                     work_entries.append((t, proj, desc))
 
@@ -962,7 +964,7 @@ class DailyReporter:
                             continue
                         proj_raw = row[2]
                         desc = row[3].strip() if len(row) >= 4 else ''
-                        if proj_raw == '출근' or '퇴근' in proj_raw:
+                        if proj_raw == '출근' or '퇴근' in proj_raw or proj_raw == '점심 시간' or desc == '점심 시간':
                             continue
                         # "피플카운터, 집합수요" 형태의 복합 프로젝트 분리
                         projects = [p.strip() for p in proj_raw.split(',') if p.strip()] or ['']
