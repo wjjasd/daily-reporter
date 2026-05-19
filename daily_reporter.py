@@ -243,9 +243,11 @@ class DailyReporter:
         # ── 알림 섹션 ────────────────────────────────────────────
         divider()
         section_label("알림")
-        tk.Label(frame, text="알림 주기 (분)", font=("Segoe UI", 10),
+        tk.Label(frame, text="알림 울리는 분 (0~59)", font=("Segoe UI", 10),
                  bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20)
-        interval_var = tk.StringVar(value=str(config.get('alarm_interval_minutes', 60)))
+        tk.Label(frame, text="예: 50 → 매시 X시 50분에 알림", font=("Segoe UI", 8),
+                 bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20)
+        interval_var = tk.StringVar(value=str(config.get('alarm_minute', 0)))
         interval_entry = tk.Entry(frame, textvariable=interval_var,
                                   font=("Segoe UI", 10), width=10,
                                   justify="center", relief="solid", bd=1)
@@ -269,11 +271,11 @@ class DailyReporter:
 
         def on_save():
             try:
-                minutes = int(interval_var.get().strip())
-                if minutes < 1:
+                alarm_minute = int(interval_var.get().strip())
+                if not (0 <= alarm_minute <= 59):
                     raise ValueError
             except ValueError:
-                messagebox.showerror("오류", "알림 주기는 1 이상의 정수를 입력하세요.", parent=win)
+                messagebox.showerror("오류", "알림 울리는 분은 0~59 사이의 정수를 입력하세요.", parent=win)
                 return
 
             if autostart_var.get() != self.autostart_var.get():
@@ -286,7 +288,7 @@ class DailyReporter:
             cfg = self._load_config()
             cfg['auto_fill'] = auto_fill_var.get()
             cfg['auto_resume'] = auto_resume_var.get()
-            cfg['alarm_interval_minutes'] = minutes
+            cfg['alarm_minute'] = alarm_minute
             cfg['reporter_name'] = name_var.get().strip()
             try:
                 with open(self._config_path(), 'w', encoding='utf-8') as f:
@@ -518,17 +520,28 @@ class DailyReporter:
     # ── 정시 알람 팝업 ───────────────────────────────────────────
     def hourly_alarm(self):
         while self.alarm_running:
-            interval = self._load_config().get('alarm_interval_minutes', 60) * 60
+            alarm_minute = self._load_config().get('alarm_minute', 0)
             now = datetime.now()
-            next_mark = now + timedelta(seconds=interval)
-            if interval >= 3600:
-                next_mark = next_mark.replace(minute=0, second=0, microsecond=0)
-            else:
-                next_mark = next_mark.replace(second=0, microsecond=0)
-            sleep_duration = (next_mark - now).total_seconds()
-            time.sleep(sleep_duration)
-            while datetime.now() < next_mark:
-                time.sleep(0.01)
+            next_mark = now.replace(minute=alarm_minute, second=0, microsecond=0)
+            if next_mark <= now:
+                next_mark += timedelta(hours=1)
+
+            # 10초마다 설정 변경 여부를 확인하며 대기
+            while self.alarm_running:
+                now = datetime.now()
+                if now >= next_mark:
+                    break
+                new_minute = self._load_config().get('alarm_minute', 0)
+                if new_minute != alarm_minute:
+                    alarm_minute = new_minute
+                    candidate = now.replace(minute=alarm_minute, second=0, microsecond=0)
+                    if candidate <= now:
+                        candidate += timedelta(hours=1)
+                    next_mark = candidate
+                    continue
+                remaining = (next_mark - now).total_seconds()
+                time.sleep(min(10, remaining))
+
             if self.alarm_running:
                 self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
 
