@@ -691,6 +691,15 @@ class DailyReporter:
             self.auto_end_day()
             return
 
+        # alarm_minute 기준으로 로그에 기록할 정각 시간 계산
+        alarm_minute = self._load_config().get('alarm_minute', 0)
+        if alarm_minute == 0 or alarm_minute == 30:
+            log_time = current_time
+        elif 1 <= alarm_minute <= 29:
+            log_time = current_time.replace(minute=0, second=0, microsecond=0)
+        else:  # 31~59
+            log_time = current_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+
         winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
 
         popup = tk.Toplevel()
@@ -703,7 +712,7 @@ class DailyReporter:
 
         tk.Label(
             popup,
-            text=current_time.strftime("%Y-%m-%d %H:%M"),
+            text=log_time.strftime("%Y-%m-%d %H:%M"),
             font=("Segoe UI", 14, "bold"),
             bg="#f5f5f5", fg="#222222"
         ).pack(pady=(16, 8))
@@ -747,8 +756,8 @@ class DailyReporter:
                 return
             buf = io.StringIO()
             csv.writer(buf).writerow([
-                current_time.strftime('%Y-%m-%d'),
-                current_time.strftime('%H:%M:%S'),
+                log_time.strftime('%Y-%m-%d'),
+                log_time.strftime('%H:%M:%S'),
                 proj, content
             ])
             raw = buf.getvalue().rstrip('\r\n')
