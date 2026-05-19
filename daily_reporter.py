@@ -531,6 +531,16 @@ class DailyReporter:
         self._log_file_mtime = os.path.getmtime(filename)
         return raw
 
+    def _warn_file_locked(self, parent=None):
+        filename = os.path.basename(self.get_today_filename())
+        kw = {'parent': parent} if parent else {}
+        messagebox.showwarning(
+            "파일 사용 중",
+            f"로그 파일이 열려 있어 저장할 수 없습니다.\n"
+            f"파일을 닫은 후 다시 시도해 주세요.\n\n파일명: {filename}",
+            **kw
+        )
+
     def poll_log_file(self):
         filename = self.get_today_filename()
         if os.path.exists(filename):
@@ -616,7 +626,11 @@ class DailyReporter:
 
     def start_day(self):
         if not self.alarm_running:
-            self.write_log("출근")
+            try:
+                self.write_log("출근")
+            except PermissionError:
+                self._warn_file_locked()
+                return
             self._resume_checkin()
 
     def _try_auto_resume(self):
@@ -653,7 +667,12 @@ class DailyReporter:
 
     def end_day(self):
         self.alarm_running = False
-        self.write_log("퇴근")
+        try:
+            self.write_log("퇴근")
+        except PermissionError:
+            self.alarm_running = True
+            self._warn_file_locked()
+            return
         self.start_button.config(state="normal", bg="#4CAF50", fg="white",
                                  activebackground="#45a049", activeforeground="white", cursor="hand2")
         self.end_button.config(state="disabled", bg="#e0e0e0", fg="#aaaaaa",
@@ -688,7 +707,12 @@ class DailyReporter:
             if self.alarm_running:
                 log_time = self._round_alarm_log_time(alarm_minute, next_mark)
                 if self._is_lunch_time(next_mark):
-                    self.root.after(0, lambda t=log_time: self.write_log("", "점심 시간", t))
+                    def _write_lunch(t=log_time):
+                        try:
+                            self.write_log("", "점심 시간", t)
+                        except PermissionError:
+                            self._warn_file_locked()
+                    self.root.after(0, _write_lunch)
                 else:
                     self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
 
@@ -756,7 +780,7 @@ class DailyReporter:
             proj = proj_entry.get().strip()
             content = desc_entry.get().strip()
             if not content:
-                messagebox.showwarning("입력 필요", "업무내용을 입력하세요.")
+                messagebox.showwarning("입력 필요", "업무내용을 입력하세요.", parent=popup)
                 return
             buf = io.StringIO()
             csv.writer(buf).writerow([
@@ -766,8 +790,12 @@ class DailyReporter:
             ])
             raw = buf.getvalue().rstrip('\r\n')
             filename = self.get_today_filename()
-            with open(filename, 'a', encoding='utf-8-sig', newline='') as f:
-                f.write(raw + '\n')
+            try:
+                with open(filename, 'a', encoding='utf-8-sig', newline='') as f:
+                    f.write(raw + '\n')
+            except PermissionError:
+                self._warn_file_locked(parent=popup)
+                return
             self._log_file_mtime = os.path.getmtime(filename)
             self._last_log_raw = raw
             display = f"{proj}  |  {content}" if proj else content
