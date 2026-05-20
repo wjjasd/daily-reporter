@@ -946,7 +946,7 @@ class DailyReporter:
                 elif '퇴근' in proj:
                     checkout_time = t
                 elif proj == '점심 시간' or desc == '점심 시간':
-                    work_entries.append((t, '점심 시간', ''))
+                    work_entries.append((t, '', '점심 시간'))
                 else:
                     work_entries.append((t, proj, desc))
 
@@ -968,8 +968,8 @@ class DailyReporter:
             ci = datetime.strptime(checkin_time, "%H:%M:%S")
             co = datetime.strptime(checkout_time, "%H:%M:%S")
             total_sec = int((co - ci).total_seconds())
-            for i, (t, proj, _) in enumerate(work_entries):
-                if proj == '점심 시간' and i + 1 < len(work_entries):
+            for i, (t, _, desc) in enumerate(work_entries):
+                if desc == '점심 시간' and i + 1 < len(work_entries):
                     lunch_s = datetime.strptime(t, "%H:%M:%S")
                     lunch_e = datetime.strptime(work_entries[i + 1][0], "%H:%M:%S")
                     total_sec -= int((lunch_e - lunch_s).total_seconds())
