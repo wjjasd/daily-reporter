@@ -967,8 +967,13 @@ class DailyReporter:
         if checkin_time and checkout_time:
             ci = datetime.strptime(checkin_time, "%H:%M:%S")
             co = datetime.strptime(checkout_time, "%H:%M:%S")
-            h = int((co - ci).total_seconds() // 3600)
-            work_hours_str = f" {h}시간"
+            total_sec = int((co - ci).total_seconds())
+            for i, (t, proj, _) in enumerate(work_entries):
+                if proj == '점심 시간' and i + 1 < len(work_entries):
+                    lunch_s = datetime.strptime(t, "%H:%M:%S")
+                    lunch_e = datetime.strptime(work_entries[i + 1][0], "%H:%M:%S")
+                    total_sec -= int((lunch_e - lunch_s).total_seconds())
+            work_hours_str = f" {total_sec // 3600}시간"
 
         out_dir = self._get_daily_report_dir()
         date_suffix = d.strftime("%y%m%d")
