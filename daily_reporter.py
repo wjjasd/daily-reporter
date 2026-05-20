@@ -946,7 +946,7 @@ class DailyReporter:
                 elif '퇴근' in proj:
                     checkout_time = t
                 elif proj == '점심 시간' or desc == '점심 시간':
-                    pass
+                    work_entries.append((t, '점심 시간', ''))
                 else:
                     work_entries.append((t, proj, desc))
 
