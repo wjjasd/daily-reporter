@@ -949,7 +949,10 @@ class DailyReporter:
                     work_entries.append((t, proj, desc))
 
         # 로그 순서대로 템플릿 행에 순차 배정
-        work_start_cfg = self._load_config().get('work_start', '').strip()
+        cfg = self._load_config()
+        work_start_cfg = cfg.get('work_start', '').strip()
+        lunch_start_cfg = cfg.get('lunch_start', '').strip()
+        lunch_end_cfg = cfg.get('lunch_end', '').strip()
         default_start = f"{work_start_cfg}:00" if work_start_cfg else "09:00:00"
         log_rows = []  # (time_range, proj, desc)
         for i, (t, proj, desc) in enumerate(work_entries[:len(_TMPL_TIMES)]):
@@ -968,11 +971,13 @@ class DailyReporter:
             ci = datetime.strptime(checkin_time, "%H:%M:%S")
             co = datetime.strptime(checkout_time, "%H:%M:%S")
             total_sec = int((co - ci).total_seconds())
-            for i, (t, _, desc) in enumerate(work_entries):
-                if desc == '점심 시간' and i + 1 < len(work_entries):
-                    lunch_s = datetime.strptime(t, "%H:%M:%S")
-                    lunch_e = datetime.strptime(work_entries[i + 1][0], "%H:%M:%S")
-                    total_sec -= int((lunch_e - lunch_s).total_seconds())
+            if lunch_start_cfg and lunch_end_cfg:
+                try:
+                    ls = datetime.strptime(lunch_start_cfg, "%H:%M")
+                    le = datetime.strptime(lunch_end_cfg, "%H:%M")
+                    total_sec -= int((le - ls).total_seconds())
+                except ValueError:
+                    pass
             work_hours_str = f" {total_sec // 3600}시간"
 
         out_dir = self._get_daily_report_dir()
