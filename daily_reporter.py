@@ -617,10 +617,8 @@ class DailyReporter:
         if work_start:
             try:
                 ws_hour = int(work_start.split(':')[0])
-                if alarm_minute < 30:
-                    first_mark = now.replace(hour=ws_hour + 1, minute=alarm_minute, second=0, microsecond=0)
-                else:
-                    first_mark = now.replace(hour=ws_hour, minute=alarm_minute, second=0, microsecond=0)
+                base = now.replace(hour=ws_hour, minute=alarm_minute, second=0, microsecond=0)
+                first_mark = base + timedelta(hours=1) if alarm_minute < 30 else base
                 if first_mark <= now:
                     hours_to_add = int((now - first_mark).total_seconds() // 3600) + 1
                     return first_mark + timedelta(hours=hours_to_add)
