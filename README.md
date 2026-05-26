@@ -39,7 +39,7 @@
 
 ## 다운로드 및 실행
 
-1. [dist/daily_reporter.exe](dist/daily_reporter.exe) 다운로드 후 원하는 폴더에 저장 (단일 파일, 별도 설치 불필요)
+1. [Releases 페이지](../../releases/latest)에서 `daily_reporter.exe` 다운로드 후 원하는 폴더에 저장 (단일 파일, 별도 설치 불필요)
 2. `daily_reporter.exe` 실행
 3. 최초 실행 시 설정 화면이 자동으로 열리면 **보고자 성명** 입력
 4. **출근** 버튼 클릭 → 출근 시각 기록 + 정시 알림 시작
