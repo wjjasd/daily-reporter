@@ -510,8 +510,9 @@ class DailyReporter:
         except Exception:
             return {}
 
-    def _is_lunch_time(self, dt):
-        config = self._load_config()
+    def _is_lunch_time(self, dt, config=None):
+        if config is None:
+            config = self._load_config()
         lunch_start = config.get('lunch_start', '').strip()
         lunch_end = config.get('lunch_end', '').strip()
         if not lunch_start or not lunch_end:
@@ -605,7 +606,7 @@ class DailyReporter:
         else:
             return t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
 
-    def _next_alarm_mark(self, alarm_minute, now):
+    def _next_alarm_mark(self, alarm_minute, now, config=None):
         """다음 알람 시각 계산. work_start 설정 시 해당 시각을 기준으로 스케줄 고정.
 
         alarm_minute < 30: 기록 시각이 현재 시 정각(내림)이므로
@@ -613,7 +614,9 @@ class DailyReporter:
         alarm_minute >= 30: 기록 시각이 다음 시 정각(올림) 또는 그대로이므로
                             첫 알람은 work_start 시간대 (예: 50분, 9시 시작 → 09:50)
         """
-        work_start = self._load_config().get('work_start', '').strip()
+        if config is None:
+            config = self._load_config()
+        work_start = config.get('work_start', '').strip()
         if work_start:
             try:
                 ws_hour = int(work_start.split(':')[0])
@@ -793,26 +796,29 @@ class DailyReporter:
     # ── 정시 알람 팝업 ───────────────────────────────────────────
     def hourly_alarm(self):
         while self.alarm_running:
-            alarm_minute = self._load_config().get('alarm_minute', 0)
+            cfg = self._load_config()
+            alarm_minute = cfg.get('alarm_minute', 0)
             now = datetime.now()
-            next_mark = self._next_alarm_mark(alarm_minute, now)
+            next_mark = self._next_alarm_mark(alarm_minute, now, cfg)
 
             # 10초마다 설정 변경 여부를 확인하며 대기
             while self.alarm_running:
                 now = datetime.now()
                 if now >= next_mark:
                     break
-                new_minute = self._load_config().get('alarm_minute', 0)
+                new_cfg = self._load_config()
+                new_minute = new_cfg.get('alarm_minute', 0)
                 if new_minute != alarm_minute:
+                    cfg = new_cfg
                     alarm_minute = new_minute
-                    next_mark = self._next_alarm_mark(alarm_minute, now)
+                    next_mark = self._next_alarm_mark(alarm_minute, now, cfg)
                     continue
                 remaining = (next_mark - now).total_seconds()
                 time.sleep(min(10, remaining))
 
             if self.alarm_running:
                 log_time = self._round_alarm_log_time(alarm_minute, next_mark)
-                if self._is_lunch_time(next_mark):
+                if self._is_lunch_time(next_mark, cfg):
                     def _write_lunch(t=log_time):
                         try:
                             self.write_log("", "점심 시간", t)
