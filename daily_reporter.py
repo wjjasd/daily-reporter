@@ -358,13 +358,14 @@ class DailyReporter:
         # ── 저장 경로 섹션 ──────────────────────────────────────
         divider()
         section_label("저장 경로")
-        tk.Label(frame, text="비워두면 exe 위치에 저장",
+        exe_dir_for_hint = self._get_exe_dir()
+        tk.Label(frame, text=f"비워두면 exe 위치에 저장: {exe_dir_for_hint}",
                  font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20)
 
         def path_picker(label_text, config_key):
             tk.Label(frame, text=label_text, font=("Segoe UI", 10),
                      bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20, pady=(8, 0))
-            var = tk.StringVar(value=config.get(config_key, '') or self._get_exe_dir())
+            var = tk.StringVar(value=config.get(config_key, ''))
             row = tk.Frame(frame, bg="#f5f5f5")
             row.pack(anchor="w", padx=20, pady=(2, 0), fill="x")
             entry = tk.Entry(row, textvariable=var, font=("Segoe UI", 9),
@@ -374,7 +375,7 @@ class DailyReporter:
             def browse(v=var):
                 from tkinter import filedialog
                 d = filedialog.askdirectory(parent=win, title=f"{label_text} 선택",
-                                            initialdir=v.get())
+                                            initialdir=v.get() or exe_dir_for_hint)
                 if d:
                     v.set(os.path.normpath(d))
 
