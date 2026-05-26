@@ -410,7 +410,7 @@ class DailyReporter:
             self.auto_fill_var.set(auto_fill_var.get())
             self.auto_resume_var.set(auto_resume_var.get())
 
-            cfg = self._load_config()
+            cfg = dict(config)
             lunch_start = lunch_start_var.get().strip()
             lunch_end = lunch_end_var.get().strip()
             if lunch_start or lunch_end:
