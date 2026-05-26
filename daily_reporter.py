@@ -209,8 +209,9 @@ class DailyReporter:
         def on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        canvas.bind("<MouseWheel>", on_mousewheel)
-        frame.bind("<MouseWheel>", on_mousewheel)
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", on_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+        win.bind("<Destroy>", lambda _e: canvas.unbind_all("<MouseWheel>"))
 
         # ── 헬퍼 ────────────────────────────────────────────────
         def section_label(text):
@@ -227,7 +228,6 @@ class DailyReporter:
                                 activebackground="#f5f5f5",
                                 selectcolor="#f5f5f5")
             cb.pack(anchor="w", padx=16)
-            cb.bind("<MouseWheel>", on_mousewheel)
 
         # ── 시스템 섹션 ──────────────────────────────────────────
         section_label("시스템")
@@ -254,7 +254,6 @@ class DailyReporter:
                                   font=("Segoe UI", 10), width=10,
                                   justify="center", relief="solid", bd=1)
         interval_entry.pack(anchor="w", padx=20, pady=(2, 0))
-        interval_entry.bind("<MouseWheel>", on_mousewheel)
 
         # ── 점심 시간 섹션 ──────────────────────────────────────
         divider()
@@ -278,8 +277,6 @@ class DailyReporter:
                                    font=("Segoe UI", 10), width=7,
                                    justify="center", relief="solid", bd=1)
         lunch_end_entry.pack(side="left", padx=(4, 0))
-        for w in (lunch_row, lunch_start_entry, lunch_end_entry):
-            w.bind("<MouseWheel>", on_mousewheel)
 
         # ── 근무 시간대 섹션 ────────────────────────────────────────
         divider()
@@ -302,13 +299,11 @@ class DailyReporter:
                                 font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
                                 activebackground="#f5f5f5", selectcolor="#f5f5f5")
             rb.pack(anchor="w", padx=20)
-            rb.bind("<MouseWheel>", on_mousewheel)
 
         custom_rb = tk.Radiobutton(frame, text="직접 입력", variable=work_preset_var, value='직접 입력',
                                    font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
                                    activebackground="#f5f5f5", selectcolor="#f5f5f5")
         custom_rb.pack(anchor="w", padx=20)
-        custom_rb.bind("<MouseWheel>", on_mousewheel)
 
         custom_hint = tk.Label(frame, text="예: 09:00 ~ 19:00  (HH:MM 형식)",
                                font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa")
@@ -331,9 +326,6 @@ class DailyReporter:
                                   justify="center", relief="solid", bd=1)
         work_end_entry.pack(side="left", padx=(4, 0))
 
-        for w in (work_custom_row, work_start_entry, work_end_entry):
-            w.bind("<MouseWheel>", on_mousewheel)
-
         def _update_work_custom(*_):
             is_custom = work_preset_var.get() == '직접 입력'
             custom_hint.config(fg="#aaaaaa" if is_custom else "#cccccc")
@@ -353,7 +345,6 @@ class DailyReporter:
                               font=("Segoe UI", 10), width=20,
                               relief="solid", bd=1)
         name_entry.pack(anchor="w", padx=20, pady=(2, 0))
-        name_entry.bind("<MouseWheel>", on_mousewheel)
 
         # ── 저장 경로 섹션 ──────────────────────────────────────
         divider()
@@ -383,8 +374,6 @@ class DailyReporter:
                       font=("Segoe UI", 9), bg="#e0e0e0", fg="#555555",
                       activebackground="#cccccc", activeforeground="#333333",
                       relief="flat", cursor="hand2", pady=3).pack(side="left")
-            for w in (row, entry):
-                w.bind("<MouseWheel>", on_mousewheel)
             return var
 
         log_dir_var = path_picker("로그 파일 저장 경로", "log_dir")
@@ -485,7 +474,6 @@ class DailyReporter:
 
         btn_row = tk.Frame(frame, bg="#f5f5f5")
         btn_row.pack(pady=(12, 20))
-        btn_row.bind("<MouseWheel>", on_mousewheel)
 
         tk.Button(btn_row, text="저장", command=on_save,
                   font=("Segoe UI", 10, "bold"),
