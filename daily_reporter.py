@@ -284,6 +284,8 @@ class DailyReporter:
         tk.Label(frame, text="해당 시간대 알림은 팝업 없이 '점심 시간'으로 자동 기록\n(비워두면 미사용)",
                  font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa",
                  justify="left", wraplength=310).pack(anchor="w", padx=20)
+        tk.Label(frame, text="예: 12:00 ~ 13:00  (HH:MM 형식)",
+                 font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20)
         lunch_row = tk.Frame(frame, bg="#f5f5f5")
         lunch_row.pack(anchor="w", padx=20, pady=(4, 0))
         tk.Label(lunch_row, text="시작", font=("Segoe UI", 10),
@@ -379,7 +381,7 @@ class DailyReporter:
         def path_picker(label_text, config_key):
             tk.Label(frame, text=label_text, font=("Segoe UI", 10),
                      bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20, pady=(8, 0))
-            var = tk.StringVar(value=config.get(config_key, ''))
+            var = tk.StringVar(value=config.get(config_key, '') or exe_dir_for_hint)
             row = tk.Frame(frame, bg="#f5f5f5")
             row.pack(anchor="w", padx=20, pady=(2, 0), fill="x")
             entry = tk.Entry(row, textvariable=var, font=("Segoe UI", 9),
