@@ -545,7 +545,7 @@ class DailyReporter:
             e_hour, e_min = map(int, lunch_end.split(':'))
             start = dt.replace(hour=s_hour, minute=s_min, second=0, microsecond=0)
             end = dt.replace(hour=e_hour, minute=e_min, second=0, microsecond=0)
-            return start <= dt < end
+            return start < dt <= end
         except (ValueError, AttributeError):
             return False
 
