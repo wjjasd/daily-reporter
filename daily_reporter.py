@@ -245,15 +245,38 @@ class DailyReporter:
         # ── 알림 섹션 ────────────────────────────────────────────
         divider()
         section_label("알림")
-        tk.Label(frame, text="알림 울리는 분 (0~59)", font=("Segoe UI", 10),
+        tk.Label(frame, text="알림 간격", font=("Segoe UI", 10),
                  bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20)
-        tk.Label(frame, text="예: 50 → 매시 X시 50분에 알림", font=("Segoe UI", 8),
-                 bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20)
-        interval_var = tk.StringVar(value=str(config.get('alarm_minute', 0)))
-        interval_entry = tk.Entry(frame, textvariable=interval_var,
-                                  font=("Segoe UI", 10), width=10,
-                                  justify="center", relief="solid", bd=1)
-        interval_entry.pack(anchor="w", padx=20, pady=(2, 0))
+        _cfg_interval = config.get('alarm_interval', 60)
+        if _cfg_interval not in (30, 60, 120):
+            _cfg_interval = 60
+        alarm_interval_var = tk.StringVar(value=str(_cfg_interval))
+        interval_row = tk.Frame(frame, bg="#f5f5f5")
+        interval_row.pack(anchor="w", padx=20, pady=(2, 0))
+        for _label_text, _value in (("30분", "30"), ("1시간", "60"), ("2시간", "120")):
+            tk.Radiobutton(interval_row, text=_label_text,
+                           variable=alarm_interval_var, value=_value,
+                           font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
+                           activebackground="#f5f5f5",
+                           selectcolor="#f5f5f5").pack(side="left", padx=(0, 8))
+
+        tk.Label(frame, text="알림 오프셋", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20, pady=(8, 0))
+        tk.Label(frame, text="알림 시각보다 몇 분 일찍 팝업을 띄울지 (기록 시각은 알림 시각 그대로)",
+                 font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa",
+                 justify="left", wraplength=310).pack(anchor="w", padx=20)
+        _cfg_offset = config.get('alarm_offset', 0)
+        if _cfg_offset not in (0, 5, 10):
+            _cfg_offset = 0
+        alarm_offset_var = tk.StringVar(value=str(_cfg_offset))
+        offset_row = tk.Frame(frame, bg="#f5f5f5")
+        offset_row.pack(anchor="w", padx=20, pady=(2, 0))
+        for _label_text, _value in (("0분", "0"), ("5분", "5"), ("10분", "10")):
+            tk.Radiobutton(offset_row, text=_label_text,
+                           variable=alarm_offset_var, value=_value,
+                           font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
+                           activebackground="#f5f5f5",
+                           selectcolor="#f5f5f5").pack(side="left", padx=(0, 8))
 
         # ── 점심 시간 섹션 ──────────────────────────────────────
         divider()
@@ -385,11 +408,18 @@ class DailyReporter:
 
         def on_save():
             try:
-                alarm_minute = int(interval_var.get().strip())
-                if not (0 <= alarm_minute <= 59):
+                alarm_interval = int(alarm_interval_var.get())
+                if alarm_interval not in (30, 60, 120):
                     raise ValueError
             except ValueError:
-                messagebox.showerror("오류", "알림 울리는 분은 0~59 사이의 정수를 입력하세요.", parent=win)
+                messagebox.showerror("오류", "알림 간격을 선택하세요.", parent=win)
+                return
+            try:
+                alarm_offset = int(alarm_offset_var.get())
+                if alarm_offset not in (0, 5, 10):
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("오류", "알림 오프셋을 선택하세요.", parent=win)
                 return
 
             if autostart_var.get() != self.autostart_var.get():
@@ -454,7 +484,9 @@ class DailyReporter:
 
             cfg['auto_fill'] = auto_fill_var.get()
             cfg['auto_resume'] = auto_resume_var.get()
-            cfg['alarm_minute'] = alarm_minute
+            cfg['alarm_interval'] = alarm_interval
+            cfg['alarm_offset'] = alarm_offset
+            cfg.pop('alarm_minute', None)
             cfg['lunch_start'] = lunch_start
             cfg['lunch_end'] = lunch_end
             cfg['work_start'] = save_work_start
@@ -587,40 +619,50 @@ class DailyReporter:
             pass
         return None
 
-    def _round_alarm_log_time(self, alarm_minute, t):
-        if alarm_minute == 0 or alarm_minute == 30:
-            return t
-        elif 1 <= alarm_minute <= 29:
-            return t.replace(minute=0, second=0, microsecond=0)
-        else:
-            return t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    _ALARM_INTERVAL_CHOICES = (30, 60, 120)
+    _ALARM_OFFSET_CHOICES = (0, 5, 10)
 
-    def _next_alarm_mark(self, alarm_minute, now, config=None):
-        """다음 알람 시각 계산. work_start 설정 시 해당 시각을 기준으로 스케줄 고정.
+    def _alarm_settings(self, config):
+        try:
+            interval = int(config.get('alarm_interval', 60))
+        except (TypeError, ValueError):
+            interval = 60
+        if interval not in self._ALARM_INTERVAL_CHOICES:
+            interval = 60
+        try:
+            offset = int(config.get('alarm_offset', 0))
+        except (TypeError, ValueError):
+            offset = 0
+        if offset not in self._ALARM_OFFSET_CHOICES:
+            offset = 0
+        return interval, offset
 
-        alarm_minute < 30: 기록 시각이 현재 시 정각(내림)이므로
-                           첫 알람은 work_start 다음 시간대 (예: 5분, 9시 시작 → 10:05)
-        alarm_minute >= 30: 기록 시각이 다음 시 정각(올림) 또는 그대로이므로
-                            첫 알람은 work_start 시간대 (예: 50분, 9시 시작 → 09:50)
+    def _next_alarm_mark(self, now, config=None):
+        """다음 알람(기록) 시각 계산.
+
+        - work_start 설정 시 해당 시각을 anchor로 삼아 interval 만큼씩 더해가며 슬롯 생성.
+          work_start 자신은 알람에서 제외 (k>=1).
+        - work_start 미설정 시 anchor는 00:00. interval=30이면 매시 :00/:30,
+          interval=60이면 매시 :00, interval=120이면 짝수시 :00에 알람.
+        - 반환값은 now보다 엄격하게 큰(>now) 가장 가까운 슬롯.
         """
         if config is None:
             config = self._load_config()
+        interval, _ = self._alarm_settings(config)
         work_start = config.get('work_start', '').strip()
+        ws_hour, ws_min = 0, 0
         if work_start:
             try:
-                ws_hour = int(work_start.split(':')[0])
-                base = now.replace(hour=ws_hour, minute=alarm_minute, second=0, microsecond=0)
-                first_mark = base + timedelta(hours=1) if alarm_minute < 30 else base
-                if first_mark <= now:
-                    hours_to_add = int((now - first_mark).total_seconds() // 3600) + 1
-                    return first_mark + timedelta(hours=hours_to_add)
-                return first_mark
+                ws_hour, ws_min = map(int, work_start.split(':'))
             except (ValueError, IndexError):
-                pass
-        mark = now.replace(minute=alarm_minute, second=0, microsecond=0)
-        if mark <= now:
-            mark += timedelta(hours=1)
-        return mark
+                ws_hour, ws_min = 0, 0
+        anchor = now.replace(hour=ws_hour, minute=ws_min, second=0, microsecond=0)
+        delta_min = (now - anchor).total_seconds() / 60
+        if delta_min < 0:
+            k = 1
+        else:
+            k = int(delta_min // interval) + 1
+        return anchor + timedelta(minutes=k * interval)
 
     def _write_log_row(self, proj, desc, dt=None):
         """CSV 행 한 줄을 파일에 append하고 raw 라인 문자열을 반환."""
@@ -786,48 +828,58 @@ class DailyReporter:
     def hourly_alarm(self):
         while self.alarm_running:
             cfg = self._load_config()
-            alarm_minute = cfg.get('alarm_minute', 0)
+            interval, offset = self._alarm_settings(cfg)
+            work_start = cfg.get('work_start', '')
             now = datetime.now()
-            next_mark = self._next_alarm_mark(alarm_minute, now, cfg)
+            next_mark = self._next_alarm_mark(now, cfg)
+            popup_time = next_mark - timedelta(minutes=offset)
 
-            # 10초마다 설정 변경 여부를 확인하며 대기
+            # 팝업 시각(next_mark - offset)까지 대기. 10초마다 설정 변경 여부 확인.
             while self.alarm_running:
                 now = datetime.now()
-                if now >= next_mark:
+                if now >= popup_time:
                     break
                 new_cfg = self._load_config()
-                new_minute = new_cfg.get('alarm_minute', 0)
-                if new_minute != alarm_minute:
+                new_interval, new_offset = self._alarm_settings(new_cfg)
+                new_work_start = new_cfg.get('work_start', '')
+                if (new_interval, new_offset, new_work_start) != (interval, offset, work_start):
                     cfg = new_cfg
-                    alarm_minute = new_minute
-                    next_mark = self._next_alarm_mark(alarm_minute, now, cfg)
+                    interval, offset, work_start = new_interval, new_offset, new_work_start
+                    next_mark = self._next_alarm_mark(now, cfg)
+                    popup_time = next_mark - timedelta(minutes=offset)
                     continue
-                remaining = (next_mark - now).total_seconds()
-                time.sleep(min(10, remaining))
+                remaining = (popup_time - now).total_seconds()
+                time.sleep(max(0.1, min(10, remaining)))
 
-            if self.alarm_running:
-                log_time = self._round_alarm_log_time(alarm_minute, next_mark)
-                if self._is_lunch_time(next_mark, cfg):
-                    def _write_lunch(t=log_time):
-                        try:
-                            self.write_log("", "점심 시간", t)
-                        except PermissionError:
-                            self._warn_file_locked()
-                    self.root.after(0, _write_lunch)
-                else:
-                    self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
+            if not self.alarm_running:
+                break
+
+            if self._is_lunch_time(next_mark, cfg):
+                def _write_lunch(t=next_mark):
+                    try:
+                        self.write_log("", "점심 시간", t)
+                    except PermissionError:
+                        self._warn_file_locked()
+                self.root.after(0, _write_lunch)
+            else:
+                self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
+
+            # 동일 슬롯 재발화 방지: next_mark 지난 뒤에 다음 슬롯 계산.
+            while self.alarm_running:
+                now = datetime.now()
+                if now > next_mark:
+                    break
+                time.sleep(min(10, (next_mark - now).total_seconds() + 1))
 
     def show_alarm_popup(self, current_time=None):
         if current_time is None:
-            current_time = datetime.now().replace(minute=0, second=0, microsecond=0)
+            current_time = self._next_alarm_mark(datetime.now())
 
         if len(self.open_popups) >= 4:
             self.auto_end_day()
             return
 
-        # alarm_minute 기준으로 로그에 기록할 정각 시간 계산
-        alarm_minute = self._load_config().get('alarm_minute', 0)
-        log_time = self._round_alarm_log_time(alarm_minute, current_time)
+        log_time = current_time
 
         winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
 
