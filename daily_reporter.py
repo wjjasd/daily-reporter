@@ -54,48 +54,13 @@ class DailyReporter:
         self.auto_fill_var = tk.BooleanVar(value=config.get('auto_fill', True))
         self.auto_resume_var = tk.BooleanVar(value=config.get('auto_resume', True))
 
-        settings_dropdown = tk.Menu(
-            root, tearoff=0,
-            bg="#f5f5f5", fg="#333333",
-            activebackground="#e0e0e0", activeforeground="#333333",
-            relief="flat", bd=1
-        )
-        settings_dropdown.add_checkbutton(
-            label="윈도우 시작 시 자동 실행",
-            variable=self.autostart_var,
-            command=self.toggle_autostart
-        )
-        settings_dropdown.add_checkbutton(
-            label="이전 내용 자동 입력",
-            variable=self.auto_fill_var,
-            command=lambda: self._save_config('auto_fill', self.auto_fill_var.get())
-        )
-        settings_dropdown.add_checkbutton(
-            label="시작 시 출근 상태 자동 복원",
-            variable=self.auto_resume_var,
-            command=lambda: self._save_config('auto_resume', self.auto_resume_var.get())
-        )
-        settings_dropdown.add_separator()
-        settings_dropdown.add_command(
-            label="알림 주기 설정...",
-            command=self._show_interval_dialog
-        )
-        settings_dropdown.add_command(
-            label="보고자 성명 설정...",
-            command=self._show_name_dialog
-        )
-
-        def show_settings(event=None):
-            btn = settings_btn
-            settings_dropdown.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
-
         settings_btn = tk.Button(
             menubar_frame, text="설정",
             font=("Segoe UI", 9),
             bg="#f5f5f5", fg="#555555",
             activebackground="#e0e0e0", activeforeground="#333333",
             relief="flat", cursor="hand2", padx=8, pady=3, bd=0,
-            command=show_settings
+            command=self._show_settings_window
         )
         settings_btn.pack(side="left")
 
@@ -208,82 +173,358 @@ class DailyReporter:
 
         self.poll_log_file()
         self.root.after(200, self._try_auto_resume)
+        if not self._load_config().get('reporter_name', '').strip():
+            self.root.after(300, self._show_settings_window)
 
     # ── 설정 저장/로드 ────────────────────────────────────────────
-    def _show_interval_dialog(self):
-        current = self._load_config().get('alarm_interval_minutes', 60)
-        popup = tk.Toplevel(self.root)
-        popup.title("알림 주기 설정")
-        popup.geometry("260x120")
-        popup.resizable(False, False)
-        popup.configure(bg="#f5f5f5")
-        popup.grab_set()
+    def _show_settings_window(self):
+        config = self._load_config()
 
-        tk.Label(popup, text="알림 주기 (분, 예: 1, 30, 60)", bg="#f5f5f5",
-                 font=("Segoe UI", 9)).pack(pady=(16, 4))
-        interval_var = tk.StringVar(value=str(current))
-        entry = tk.Entry(popup, textvariable=interval_var, font=("Segoe UI", 11),
-                         width=10, justify="center")
-        entry.pack()
-        entry.select_range(0, 'end')
-        entry.focus_set()
+        win = tk.Toplevel(self.root)
+        win.title("설정")
+        win.geometry("360x500")
+        win.resizable(False, False)
+        win.configure(bg="#f5f5f5")
+        win.grab_set()
 
-        def on_confirm(_event=None):
+        # 스크롤 가능한 캔버스
+        canvas = tk.Canvas(win, bg="#f5f5f5", highlightthickness=0)
+        scrollbar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        frame = tk.Frame(canvas, bg="#f5f5f5")
+        frame_id = canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        def on_frame_configure(_event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def on_canvas_configure(event):
+            canvas.itemconfig(frame_id, width=event.width)
+
+        frame.bind("<Configure>", on_frame_configure)
+        canvas.bind("<Configure>", on_canvas_configure)
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", on_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+        win.bind("<Destroy>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        # ── 헬퍼 ────────────────────────────────────────────────
+        def section_label(text):
+            tk.Label(frame, text=text, font=("Segoe UI", 8),
+                     bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20, pady=(16, 2))
+
+        def divider():
+            tk.Frame(frame, height=1, bg="#e0e0e0").pack(fill="x", padx=20, pady=(8, 0))
+
+        def checkbutton(text, var):
+            cb = tk.Checkbutton(frame, text=text, variable=var,
+                                font=("Segoe UI", 10),
+                                bg="#f5f5f5", fg="#333333",
+                                activebackground="#f5f5f5",
+                                selectcolor="#f5f5f5")
+            cb.pack(anchor="w", padx=16)
+
+        # ── 시스템 섹션 ──────────────────────────────────────────
+        section_label("시스템")
+        autostart_var = tk.BooleanVar(value=self.get_autostart())
+        checkbutton("윈도우 시작 시 자동 실행", autostart_var)
+
+        # ── 입력 섹션 ────────────────────────────────────────────
+        divider()
+        section_label("입력")
+        auto_fill_var = tk.BooleanVar(value=config.get('auto_fill', True))
+        checkbutton("이전 내용 자동 입력", auto_fill_var)
+        auto_resume_var = tk.BooleanVar(value=config.get('auto_resume', True))
+        checkbutton("시작 시 출근 상태 자동 복원", auto_resume_var)
+
+        # ── 알림 섹션 ────────────────────────────────────────────
+        divider()
+        section_label("알림")
+        tk.Label(frame, text="알림 간격", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20)
+        _cfg_interval = config.get('alarm_interval', 60)
+        if _cfg_interval not in (30, 60, 120):
+            _cfg_interval = 60
+        alarm_interval_var = tk.StringVar(value=str(_cfg_interval))
+        interval_row = tk.Frame(frame, bg="#f5f5f5")
+        interval_row.pack(anchor="w", padx=20, pady=(2, 0))
+        for _label_text, _value in (("30분", "30"), ("1시간", "60"), ("2시간", "120")):
+            tk.Radiobutton(interval_row, text=_label_text,
+                           variable=alarm_interval_var, value=_value,
+                           font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
+                           activebackground="#f5f5f5",
+                           selectcolor="#f5f5f5").pack(side="left", padx=(0, 8))
+
+        tk.Label(frame, text="알림 오프셋", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20, pady=(8, 0))
+        tk.Label(frame, text="알림 시각보다 몇 분 일찍 팝업을 띄울지 (기록 시각은 알림 시각 그대로)",
+                 font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa",
+                 justify="left", wraplength=310).pack(anchor="w", padx=20)
+        _cfg_offset = config.get('alarm_offset', 0)
+        if _cfg_offset not in (0, 5, 10):
+            _cfg_offset = 0
+        alarm_offset_var = tk.StringVar(value=str(_cfg_offset))
+        offset_row = tk.Frame(frame, bg="#f5f5f5")
+        offset_row.pack(anchor="w", padx=20, pady=(2, 0))
+        for _label_text, _value in (("0분", "0"), ("5분", "5"), ("10분", "10")):
+            tk.Radiobutton(offset_row, text=_label_text,
+                           variable=alarm_offset_var, value=_value,
+                           font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
+                           activebackground="#f5f5f5",
+                           selectcolor="#f5f5f5").pack(side="left", padx=(0, 8))
+
+        # ── 점심 시간 섹션 ──────────────────────────────────────
+        divider()
+        section_label("점심 시간")
+        tk.Label(frame, text="해당 시간대 알림은 팝업 없이 '점심 시간'으로 자동 기록\n(비워두면 미사용)",
+                 font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa",
+                 justify="left", wraplength=310).pack(anchor="w", padx=20)
+        tk.Label(frame, text="예: 12:00 ~ 13:00  (HH:MM 형식)",
+                 font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20)
+        lunch_row = tk.Frame(frame, bg="#f5f5f5")
+        lunch_row.pack(anchor="w", padx=20, pady=(4, 0))
+        tk.Label(lunch_row, text="시작", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(side="left")
+        lunch_start_var = tk.StringVar(value=config.get('lunch_start', ''))
+        lunch_start_entry = tk.Entry(lunch_row, textvariable=lunch_start_var,
+                                     font=("Segoe UI", 10), width=7,
+                                     justify="center", relief="solid", bd=1)
+        lunch_start_entry.pack(side="left", padx=(4, 10))
+        tk.Label(lunch_row, text="종료", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(side="left")
+        lunch_end_var = tk.StringVar(value=config.get('lunch_end', ''))
+        lunch_end_entry = tk.Entry(lunch_row, textvariable=lunch_end_var,
+                                   font=("Segoe UI", 10), width=7,
+                                   justify="center", relief="solid", bd=1)
+        lunch_end_entry.pack(side="left", padx=(4, 0))
+
+        # ── 근무 시간대 섹션 ────────────────────────────────────────
+        divider()
+        section_label("근무 시간대")
+
+        _PRESETS = [
+            ('9-6',  '09:00', '18:00', '9-6  (09:00 ~ 18:00)'),
+            ('10-7', '10:00', '19:00', '10-7  (10:00 ~ 19:00)'),
+        ]
+        work_start_cfg = config.get('work_start', '')
+        work_end_cfg = config.get('work_end', '')
+        _preset_key = next(
+            (k for k, s, e, _ in _PRESETS if s == work_start_cfg and e == work_end_cfg),
+            '직접 입력'
+        )
+        work_preset_var = tk.StringVar(value=_preset_key)
+
+        for key, _, _, label in _PRESETS:
+            rb = tk.Radiobutton(frame, text=label, variable=work_preset_var, value=key,
+                                font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
+                                activebackground="#f5f5f5", selectcolor="#f5f5f5")
+            rb.pack(anchor="w", padx=20)
+
+        custom_rb = tk.Radiobutton(frame, text="직접 입력", variable=work_preset_var, value='직접 입력',
+                                   font=("Segoe UI", 10), bg="#f5f5f5", fg="#333333",
+                                   activebackground="#f5f5f5", selectcolor="#f5f5f5")
+        custom_rb.pack(anchor="w", padx=20)
+
+        custom_hint = tk.Label(frame, text="예: 09:00 ~ 19:00  (HH:MM 형식)",
+                               font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa")
+        custom_hint.pack(anchor="w", padx=40)
+
+        work_custom_row = tk.Frame(frame, bg="#f5f5f5")
+        work_custom_row.pack(anchor="w", padx=40, pady=(2, 0))
+        tk.Label(work_custom_row, text="시작", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(side="left")
+        work_start_var = tk.StringVar(value=work_start_cfg if _preset_key == '직접 입력' else '')
+        work_start_entry = tk.Entry(work_custom_row, textvariable=work_start_var,
+                                    font=("Segoe UI", 10), width=7,
+                                    justify="center", relief="solid", bd=1)
+        work_start_entry.pack(side="left", padx=(4, 10))
+        tk.Label(work_custom_row, text="종료", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(side="left")
+        work_end_var = tk.StringVar(value=work_end_cfg if _preset_key == '직접 입력' else '')
+        work_end_entry = tk.Entry(work_custom_row, textvariable=work_end_var,
+                                  font=("Segoe UI", 10), width=7,
+                                  justify="center", relief="solid", bd=1)
+        work_end_entry.pack(side="left", padx=(4, 0))
+
+        def _update_work_custom(*_):
+            is_custom = work_preset_var.get() == '직접 입력'
+            custom_hint.config(fg="#aaaaaa" if is_custom else "#cccccc")
+            work_start_entry.config(state="normal" if is_custom else "disabled")
+            work_end_entry.config(state="normal" if is_custom else "disabled")
+
+        work_preset_var.trace_add('write', _update_work_custom)
+        _update_work_custom()
+
+        # ── 보고서 섹션 ──────────────────────────────────────────
+        divider()
+        section_label("보고서")
+        tk.Label(frame, text="보고자 성명", font=("Segoe UI", 10),
+                 bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20)
+        name_var = tk.StringVar(value=config.get('reporter_name', ''))
+        name_entry = tk.Entry(frame, textvariable=name_var,
+                              font=("Segoe UI", 10), width=20,
+                              relief="solid", bd=1)
+        name_entry.pack(anchor="w", padx=20, pady=(2, 0))
+
+        # ── 저장 경로 섹션 ──────────────────────────────────────
+        divider()
+        section_label("저장 경로")
+        exe_dir_for_hint = self._get_exe_dir()
+        tk.Label(frame, text=f"비워두면 exe 위치에 저장: {exe_dir_for_hint}",
+                 font=("Segoe UI", 8), bg="#f5f5f5", fg="#aaaaaa").pack(anchor="w", padx=20)
+
+        def path_picker(label_text, config_key):
+            tk.Label(frame, text=label_text, font=("Segoe UI", 10),
+                     bg="#f5f5f5", fg="#333333").pack(anchor="w", padx=20, pady=(8, 0))
+            var = tk.StringVar(value=config.get(config_key, '') or exe_dir_for_hint)
+            row = tk.Frame(frame, bg="#f5f5f5")
+            row.pack(anchor="w", padx=20, pady=(2, 0), fill="x")
+            entry = tk.Entry(row, textvariable=var, font=("Segoe UI", 9),
+                             width=28, relief="solid", bd=1)
+            entry.pack(side="left", padx=(0, 4))
+
+            def browse(v=var):
+                from tkinter import filedialog
+                d = filedialog.askdirectory(parent=win, title=f"{label_text} 선택",
+                                            initialdir=v.get() or exe_dir_for_hint)
+                if d:
+                    v.set(os.path.normpath(d))
+
+            tk.Button(row, text="찾아보기", command=browse,
+                      font=("Segoe UI", 9), bg="#e0e0e0", fg="#555555",
+                      activebackground="#cccccc", activeforeground="#333333",
+                      relief="flat", cursor="hand2", pady=3).pack(side="left")
+            return var
+
+        log_dir_var = path_picker("로그 파일 저장 경로", "log_dir")
+        daily_dir_var = path_picker("일일업무보고 저장 경로", "daily_report_dir")
+        weekly_dir_var = path_picker("주간업무보고 저장 경로", "weekly_report_dir")
+
+        # ── 저장 버튼 ────────────────────────────────────────────
+        divider()
+
+        def on_save():
             try:
-                minutes = int(interval_var.get().strip())
-                if minutes < 1:
+                alarm_interval = int(alarm_interval_var.get())
+                if alarm_interval not in (30, 60, 120):
                     raise ValueError
             except ValueError:
-                messagebox.showerror("오류", "1 이상의 정수를 입력하세요.", parent=popup)
+                messagebox.showerror("오류", "알림 간격을 선택하세요.", parent=win)
                 return
-            self._save_config('alarm_interval_minutes', minutes)
-            popup.destroy()
+            try:
+                alarm_offset = int(alarm_offset_var.get())
+                if alarm_offset not in (0, 5, 10):
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("오류", "알림 오프셋을 선택하세요.", parent=win)
+                return
 
-        popup.bind("<Return>", on_confirm)
-        tk.Button(popup, text="확인", command=on_confirm,
+            if autostart_var.get() != self.autostart_var.get():
+                self.autostart_var.set(autostart_var.get())
+                self.toggle_autostart()
+
+            self.auto_fill_var.set(auto_fill_var.get())
+            self.auto_resume_var.set(auto_resume_var.get())
+
+            cfg = dict(config)
+            lunch_start = lunch_start_var.get().strip()
+            lunch_end = lunch_end_var.get().strip()
+            if lunch_start or lunch_end:
+                try:
+                    if not lunch_start or not lunch_end:
+                        raise ValueError
+                    s = datetime.strptime(lunch_start, "%H:%M")
+                    e = datetime.strptime(lunch_end, "%H:%M")
+                    if s >= e:
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror("오류",
+                        "점심 시간 형식이 올바르지 않습니다.\n"
+                        "HH:MM 형식으로 입력하고 시작 < 종료여야 합니다.\n"
+                        "예: 12:00 ~ 13:00", parent=win)
+                    return
+
+            exe_dir = self._get_exe_dir()
+            dir_fields = [
+                ('log_dir', log_dir_var, "로그 파일 저장 경로"),
+                ('daily_report_dir', daily_dir_var, "일일업무보고 저장 경로"),
+                ('weekly_report_dir', weekly_dir_var, "주간업무보고 저장 경로"),
+            ]
+            for key, var, label in dir_fields:
+                d = var.get().strip()
+                if d and d != exe_dir and not os.path.isdir(d):
+                    messagebox.showerror("오류",
+                        f"[{label}] 경로가 존재하지 않습니다:\n{d}", parent=win)
+                    return
+
+            _PRESET_TIMES = {'9-6': ('09:00', '18:00'), '10-7': ('10:00', '19:00')}
+            preset = work_preset_var.get()
+            if preset in _PRESET_TIMES:
+                save_work_start, save_work_end = _PRESET_TIMES[preset]
+            else:
+                save_work_start = work_start_var.get().strip()
+                save_work_end = work_end_var.get().strip()
+                if save_work_start or save_work_end:
+                    try:
+                        if not save_work_start or not save_work_end:
+                            raise ValueError
+                        ws = datetime.strptime(save_work_start, "%H:%M")
+                        we = datetime.strptime(save_work_end, "%H:%M")
+                        if ws >= we:
+                            raise ValueError
+                    except ValueError:
+                        messagebox.showerror("오류",
+                            "근무 시간대 형식이 올바르지 않습니다.\n"
+                            "HH:MM 형식으로 입력하고 시작 < 종료여야 합니다.\n"
+                            "예: 09:00 ~ 19:00", parent=win)
+                        return
+
+            cfg['auto_fill'] = auto_fill_var.get()
+            cfg['auto_resume'] = auto_resume_var.get()
+            cfg['alarm_interval'] = alarm_interval
+            cfg['alarm_offset'] = alarm_offset
+            cfg.pop('alarm_minute', None)
+            cfg['lunch_start'] = lunch_start
+            cfg['lunch_end'] = lunch_end
+            cfg['work_start'] = save_work_start
+            cfg['work_end'] = save_work_end
+            cfg['reporter_name'] = name_var.get().strip()
+            for key, var, _ in dir_fields:
+                d = var.get().strip()
+                cfg[key] = '' if (not d or d == exe_dir) else d
+            try:
+                with open(self._config_path(), 'w', encoding='utf-8') as f:
+                    json.dump(cfg, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                messagebox.showerror("오류", f"설정 저장 실패:\n{e}", parent=win)
+                return
+
+            win.destroy()
+
+        btn_row = tk.Frame(frame, bg="#f5f5f5")
+        btn_row.pack(pady=(12, 20))
+
+        tk.Button(btn_row, text="저장", command=on_save,
                   font=("Segoe UI", 10, "bold"),
                   bg="#1a6bbf", fg="white",
                   activebackground="#155a99", activeforeground="white",
-                  relief="flat", cursor="hand2", padx=12, pady=3
-                  ).pack(pady=(10, 0))
+                  relief="flat", cursor="hand2",
+                  width=10, pady=5).pack(side="left", padx=(0, 6))
 
-    def _show_name_dialog(self):
-        current = self._load_config().get('reporter_name', '')
-        popup = tk.Toplevel(self.root)
-        popup.title("보고자 성명 설정")
-        popup.geometry("260x120")
-        popup.resizable(False, False)
-        popup.configure(bg="#f5f5f5")
-        popup.grab_set()
-
-        tk.Label(popup, text="이름 (예: 홍길동)", bg="#f5f5f5",
-                 font=("Segoe UI", 9)).pack(pady=(16, 4))
-        name_var = tk.StringVar(value=current)
-        entry = tk.Entry(popup, textvariable=name_var, font=("Segoe UI", 11),
-                         width=20, justify="center")
-        entry.pack()
-        entry.select_range(0, 'end')
-        entry.focus_set()
-
-        def on_confirm(_event=None):
-            name = name_var.get().strip()
-            self._save_config('reporter_name', name)
-            popup.destroy()
-
-        popup.bind("<Return>", on_confirm)
-        tk.Button(popup, text="확인", command=on_confirm,
-                  font=("Segoe UI", 10, "bold"),
-                  bg="#1a6bbf", fg="white",
-                  activebackground="#155a99", activeforeground="white",
-                  relief="flat", cursor="hand2", padx=12, pady=3
-                  ).pack(pady=(10, 0))
+        tk.Button(btn_row, text="취소", command=win.destroy,
+                  font=("Segoe UI", 10),
+                  bg="#e0e0e0", fg="#555555",
+                  activebackground="#cccccc", activeforeground="#333333",
+                  relief="flat", cursor="hand2",
+                  width=10, pady=5).pack(side="left")
 
     def _config_path(self):
-        if hasattr(sys, '_MEIPASS'):
-            d = os.path.dirname(sys.executable)
-        else:
-            d = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(d, 'config.json')
+        return os.path.join(self._get_exe_dir(), 'config.json')
 
     def _load_config(self):
         try:
@@ -291,6 +532,22 @@ class DailyReporter:
                 return json.load(f)
         except Exception:
             return {}
+
+    def _is_lunch_time(self, dt, config=None):
+        if config is None:
+            config = self._load_config()
+        lunch_start = config.get('lunch_start', '').strip()
+        lunch_end = config.get('lunch_end', '').strip()
+        if not lunch_start or not lunch_end:
+            return False
+        try:
+            s_hour, s_min = map(int, lunch_start.split(':'))
+            e_hour, e_min = map(int, lunch_end.split(':'))
+            start = dt.replace(hour=s_hour, minute=s_min, second=0, microsecond=0)
+            end = dt.replace(hour=e_hour, minute=e_min, second=0, microsecond=0)
+            return start < dt <= end
+        except (ValueError, AttributeError):
+            return False
 
     def _save_config(self, key, value):
         config = self._load_config()
@@ -328,13 +585,29 @@ class DailyReporter:
             self.autostart_var.set(not self.autostart_var.get())
 
     # ── 로그 파일 ────────────────────────────────────────────────
+    def _get_exe_dir(self):
+        if hasattr(sys, '_MEIPASS'):
+            return os.path.dirname(sys.executable)
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _resolve_dir(self, config_key):
+        d = self._load_config().get(config_key, '').strip()
+        if d and os.path.isdir(d):
+            return d
+        return self._get_exe_dir()
+
+    def _get_log_dir(self):
+        return self._resolve_dir('log_dir')
+
+    def _get_daily_report_dir(self):
+        return self._resolve_dir('daily_report_dir')
+
+    def _get_weekly_report_dir(self):
+        return self._resolve_dir('weekly_report_dir')
+
     def get_today_filename(self):
         today = datetime.now().strftime("%Y-%m-%d")
-        if hasattr(sys, '_MEIPASS'):
-            exec_dir = os.path.dirname(sys.executable)
-        else:
-            exec_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(exec_dir, f"{today}.csv")
+        return os.path.join(self._get_log_dir(), f"{today}.csv")
 
     def _parse_csv_line(self, line):
         """CSV 한 줄을 (date, time, project, desc) 로 파싱. 실패 시 None."""
@@ -348,9 +621,54 @@ class DailyReporter:
             pass
         return None
 
-    def _write_log_row(self, proj, desc):
+    _ALARM_INTERVAL_CHOICES = (30, 60, 120)
+    _ALARM_OFFSET_CHOICES = (0, 5, 10)
+
+    def _alarm_settings(self, config):
+        try:
+            interval = int(config.get('alarm_interval', 60))
+        except (TypeError, ValueError):
+            interval = 60
+        if interval not in self._ALARM_INTERVAL_CHOICES:
+            interval = 60
+        try:
+            offset = int(config.get('alarm_offset', 0))
+        except (TypeError, ValueError):
+            offset = 0
+        if offset not in self._ALARM_OFFSET_CHOICES:
+            offset = 0
+        return interval, offset
+
+    def _next_alarm_mark(self, now, config=None):
+        """다음 알람(기록) 시각 계산.
+
+        - work_start 설정 시 해당 시각을 anchor로 삼아 interval 만큼씩 더해가며 슬롯 생성.
+          work_start 자신은 알람에서 제외 (k>=1).
+        - work_start 미설정 시 anchor는 00:00. interval=30이면 매시 :00/:30,
+          interval=60이면 매시 :00, interval=120이면 짝수시 :00에 알람.
+        - 반환값은 now보다 엄격하게 큰(>now) 가장 가까운 슬롯.
+        """
+        if config is None:
+            config = self._load_config()
+        interval, _ = self._alarm_settings(config)
+        work_start = config.get('work_start', '').strip()
+        ws_hour, ws_min = 0, 0
+        if work_start:
+            try:
+                ws_hour, ws_min = map(int, work_start.split(':'))
+            except (ValueError, IndexError):
+                ws_hour, ws_min = 0, 0
+        anchor = now.replace(hour=ws_hour, minute=ws_min, second=0, microsecond=0)
+        delta_min = (now - anchor).total_seconds() / 60
+        if delta_min < 0:
+            k = 1
+        else:
+            k = int(delta_min // interval) + 1
+        return anchor + timedelta(minutes=k * interval)
+
+    def _write_log_row(self, proj, desc, dt=None):
         """CSV 행 한 줄을 파일에 append하고 raw 라인 문자열을 반환."""
-        now = datetime.now()
+        now = dt if dt is not None else datetime.now()
         filename = self.get_today_filename()
         buf = io.StringIO()
         csv.writer(buf).writerow([now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), proj, desc])
@@ -359,6 +677,16 @@ class DailyReporter:
             f.write(raw + '\n')
         self._log_file_mtime = os.path.getmtime(filename)
         return raw
+
+    def _warn_file_locked(self, parent=None):
+        filename = os.path.basename(self.get_today_filename())
+        kw = {'parent': parent} if parent else {}
+        messagebox.showwarning(
+            "파일 사용 중",
+            f"로그 파일이 열려 있어 저장할 수 없습니다.\n"
+            f"파일을 닫은 후 다시 시도해 주세요.\n\n파일명: {filename}",
+            **kw
+        )
 
     def poll_log_file(self):
         filename = self.get_today_filename()
@@ -411,8 +739,8 @@ class DailyReporter:
         self.root.clipboard_clear()
         self.root.clipboard_append(content)
 
-    def write_log(self, text):
-        raw = self._write_log_row(text, "")
+    def write_log(self, proj, desc="", dt=None):
+        raw = self._write_log_row(proj, desc, dt)
         self._last_log_raw = raw
         self.last_log_label.config(text=self._format_log_display(raw))
 
@@ -428,7 +756,7 @@ class DailyReporter:
             if not parsed:
                 continue
             _, _, proj, desc = parsed
-            if proj == '출근' or '퇴근' in proj:
+            if proj == '출근' or '퇴근' in proj or proj == '점심 시간' or desc == '점심 시간':
                 continue
             return proj, desc
         return '', ''
@@ -445,7 +773,11 @@ class DailyReporter:
 
     def start_day(self):
         if not self.alarm_running:
-            self.write_log("출근")
+            try:
+                self.write_log("출근")
+            except PermissionError:
+                self._warn_file_locked()
+                return
             self._resume_checkin()
 
     def _try_auto_resume(self):
@@ -482,7 +814,12 @@ class DailyReporter:
 
     def end_day(self):
         self.alarm_running = False
-        self.write_log("퇴근")
+        try:
+            self.write_log("퇴근")
+        except PermissionError:
+            self.alarm_running = True
+            self._warn_file_locked()
+            return
         self.start_button.config(state="normal", bg="#4CAF50", fg="white",
                                  activebackground="#45a049", activeforeground="white", cursor="hand2")
         self.end_button.config(state="disabled", bg="#e0e0e0", fg="#aaaaaa",
@@ -492,27 +829,59 @@ class DailyReporter:
     # ── 정시 알람 팝업 ───────────────────────────────────────────
     def hourly_alarm(self):
         while self.alarm_running:
-            interval = self._load_config().get('alarm_interval_minutes', 60) * 60
+            cfg = self._load_config()
+            interval, offset = self._alarm_settings(cfg)
+            work_start = cfg.get('work_start', '')
             now = datetime.now()
-            next_mark = now + timedelta(seconds=interval)
-            if interval >= 3600:
-                next_mark = next_mark.replace(minute=0, second=0, microsecond=0)
+            next_mark = self._next_alarm_mark(now, cfg)
+            popup_time = next_mark - timedelta(minutes=offset)
+
+            # 팝업 시각(next_mark - offset)까지 대기. 10초마다 설정 변경 여부 확인.
+            while self.alarm_running:
+                now = datetime.now()
+                if now >= popup_time:
+                    break
+                new_cfg = self._load_config()
+                new_interval, new_offset = self._alarm_settings(new_cfg)
+                new_work_start = new_cfg.get('work_start', '')
+                if (new_interval, new_offset, new_work_start) != (interval, offset, work_start):
+                    cfg = new_cfg
+                    interval, offset, work_start = new_interval, new_offset, new_work_start
+                    next_mark = self._next_alarm_mark(now, cfg)
+                    popup_time = next_mark - timedelta(minutes=offset)
+                    continue
+                remaining = (popup_time - now).total_seconds()
+                time.sleep(max(0.1, min(10, remaining)))
+
+            if not self.alarm_running:
+                break
+
+            if self._is_lunch_time(next_mark, cfg):
+                def _write_lunch(t=next_mark):
+                    try:
+                        self.write_log("", "점심 시간", t)
+                    except PermissionError:
+                        self._warn_file_locked()
+                self.root.after(0, _write_lunch)
             else:
-                next_mark = next_mark.replace(second=0, microsecond=0)
-            sleep_duration = (next_mark - now).total_seconds()
-            time.sleep(sleep_duration)
-            while datetime.now() < next_mark:
-                time.sleep(0.01)
-            if self.alarm_running:
                 self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
+
+            # 동일 슬롯 재발화 방지: next_mark 지난 뒤에 다음 슬롯 계산.
+            while self.alarm_running:
+                now = datetime.now()
+                if now > next_mark:
+                    break
+                time.sleep(min(10, (next_mark - now).total_seconds() + 1))
 
     def show_alarm_popup(self, current_time=None):
         if current_time is None:
-            current_time = datetime.now().replace(minute=0, second=0, microsecond=0)
+            current_time = self._next_alarm_mark(datetime.now())
 
         if len(self.open_popups) >= 4:
             self.auto_end_day()
             return
+
+        log_time = current_time
 
         winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
 
@@ -526,7 +895,7 @@ class DailyReporter:
 
         tk.Label(
             popup,
-            text=current_time.strftime("%Y-%m-%d %H:%M"),
+            text=log_time.strftime("%Y-%m-%d %H:%M"),
             font=("Segoe UI", 14, "bold"),
             bg="#f5f5f5", fg="#222222"
         ).pack(pady=(16, 8))
@@ -566,18 +935,22 @@ class DailyReporter:
             proj = proj_entry.get().strip()
             content = desc_entry.get().strip()
             if not content:
-                messagebox.showwarning("입력 필요", "업무내용을 입력하세요.")
+                messagebox.showwarning("입력 필요", "업무내용을 입력하세요.", parent=popup)
                 return
             buf = io.StringIO()
             csv.writer(buf).writerow([
-                current_time.strftime('%Y-%m-%d'),
-                current_time.strftime('%H:%M:%S'),
+                log_time.strftime('%Y-%m-%d'),
+                log_time.strftime('%H:%M:%S'),
                 proj, content
             ])
             raw = buf.getvalue().rstrip('\r\n')
             filename = self.get_today_filename()
-            with open(filename, 'a', encoding='utf-8-sig', newline='') as f:
-                f.write(raw + '\n')
+            try:
+                with open(filename, 'a', encoding='utf-8-sig', newline='') as f:
+                    f.write(raw + '\n')
+            except PermissionError:
+                self._warn_file_locked(parent=popup)
+                return
             self._log_file_mtime = os.path.getmtime(filename)
             self._last_log_raw = raw
             display = f"{proj}  |  {content}" if proj else content
@@ -619,13 +992,20 @@ class DailyReporter:
                     checkin_time = t
                 elif '퇴근' in proj:
                     checkout_time = t
+                elif proj == '점심 시간' or desc == '점심 시간':
+                    work_entries.append((t, '', '점심 시간'))
                 else:
                     work_entries.append((t, proj, desc))
 
         # 로그 순서대로 템플릿 행에 순차 배정
+        cfg = self._load_config()
+        work_start_cfg = cfg.get('work_start', '').strip()
+        lunch_start_cfg = cfg.get('lunch_start', '').strip()
+        lunch_end_cfg = cfg.get('lunch_end', '').strip()
+        default_start = f"{work_start_cfg}:00" if work_start_cfg else "09:00:00"
         log_rows = []  # (time_range, proj, desc)
         for i, (t, proj, desc) in enumerate(work_entries[:len(_TMPL_TIMES)]):
-            start = checkin_time if i == 0 else work_entries[i - 1][0]
+            start = default_start if i == 0 else work_entries[i - 1][0]
             log_rows.append((f"{(start or t)[:5]}~{t[:5]}", proj, desc))
 
         # 날짜는 로그 파일 기준
@@ -639,12 +1019,19 @@ class DailyReporter:
         if checkin_time and checkout_time:
             ci = datetime.strptime(checkin_time, "%H:%M:%S")
             co = datetime.strptime(checkout_time, "%H:%M:%S")
-            h = int((co - ci).total_seconds() // 3600)
-            work_hours_str = f" {h}시간"
+            total_sec = int((co - ci).total_seconds())
+            if lunch_start_cfg and lunch_end_cfg:
+                try:
+                    ls = datetime.strptime(lunch_start_cfg, "%H:%M")
+                    le = datetime.strptime(lunch_end_cfg, "%H:%M")
+                    total_sec -= int((le - ls).total_seconds())
+                except ValueError:
+                    pass
+            work_hours_str = f" {total_sec // 3600}시간"
 
-        out_dir = os.path.dirname(log_file)
-        date_suffix = d.strftime("%y_%m_%d")
-        out_file = os.path.join(out_dir, f"일일업무보고_{date_suffix}.hwpx")
+        out_dir = self._get_daily_report_dir()
+        date_suffix = d.strftime("%y%m%d")
+        out_file = os.path.join(out_dir, f"유타렉스_일일업무보고_{date_suffix}.hwpx")
 
         try:
             # 템플릿 XML을 메모리에서 수정 후 한 번에 기록
@@ -772,7 +1159,7 @@ class DailyReporter:
                             continue
                         proj_raw = row[2]
                         desc = row[3].strip() if len(row) >= 4 else ''
-                        if proj_raw == '출근' or '퇴근' in proj_raw:
+                        if proj_raw == '출근' or '퇴근' in proj_raw or proj_raw == '점심 시간' or desc == '점심 시간':
                             continue
                         # "피플카운터, 집합수요" 형태의 복합 프로젝트 분리
                         projects = [p.strip() for p in proj_raw.split(',') if p.strip()] or ['']
@@ -793,9 +1180,9 @@ class DailyReporter:
             rows.append((proj, ', '.join(descs)))
 
         friday_str = end_date.strftime("%m.%d")
-        out_dir = log_dir
-        date_suffix = datetime.now().strftime("%y_%m_%d")
-        out_file = os.path.join(out_dir, f"주간업무보고_{date_suffix}.hwpx")
+        out_dir = self._get_weekly_report_dir()
+        date_suffix = datetime.now().strftime("%y%m%d")
+        out_file = os.path.join(out_dir, f"유타렉스_주간업무보고_{date_suffix}.hwpx")
 
         try:
             tmpl_bytes = base64.b64decode(_TMPL_WEEKLY_B64)

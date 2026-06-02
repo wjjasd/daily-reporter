@@ -1,7 +1,9 @@
 build/
+dist/
 *.spec
 __pycache__/
 *.pyc
 *.txt
+config.json
 .claude/
 .idea/
