@@ -832,11 +832,87 @@ class DailyReporter:
             cfg = self._load_config()
             interval, offset = self._alarm_settings(cfg)
             work_start = cfg.get('work_start', '')
+            lunch_start_str = cfg.get('lunch_start', '').strip()
+            lunch_end_str = cfg.get('lunch_end', '').strip()
             now = datetime.now()
             next_mark = self._next_alarm_mark(now, cfg)
+
+            # 점심 처리 여부 판단:
+            # - in_lunch : next_mark 자체가 점심 시간대 (점심 중 재시작 등)
+            # - pre_lunch: next_mark 다음 슬롯이 점심 시간대 (점심 직전 슬롯)
+            in_lunch = bool(lunch_start_str and lunch_end_str
+                            and self._is_lunch_time(next_mark, cfg))
+            pre_lunch = (not in_lunch and bool(lunch_start_str and lunch_end_str)
+                         and self._is_lunch_time(
+                             next_mark + timedelta(minutes=interval), cfg))
+
+            lunch_start_dt = lunch_end_dt = None
+            if in_lunch or pre_lunch:
+                try:
+                    ls_h, ls_m = map(int, lunch_start_str.split(':'))
+                    le_h, le_m = map(int, lunch_end_str.split(':'))
+                    _now = datetime.now()
+                    lunch_start_dt = _now.replace(hour=ls_h, minute=ls_m, second=0, microsecond=0)
+                    lunch_end_dt = _now.replace(hour=le_h, minute=le_m, second=0, microsecond=0)
+                except (ValueError, AttributeError):
+                    lunch_start_dt = lunch_end_dt = None
+
+            if lunch_start_dt and lunch_end_dt:
+                pre_popup_time = lunch_start_dt - timedelta(minutes=offset)
+
+                # 점심 직전 팝업 시각(lunch_start - offset)까지 대기
+                restart = False
+                while self.alarm_running:
+                    now = datetime.now()
+                    if now >= pre_popup_time:
+                        break
+                    new_cfg = self._load_config()
+                    new_interval, new_offset = self._alarm_settings(new_cfg)
+                    new_work_start = new_cfg.get('work_start', '')
+                    if (new_interval, new_offset, new_work_start) != (interval, offset, work_start):
+                        restart = True
+                        break
+                    time.sleep(max(0.1, min(10, (pre_popup_time - now).total_seconds())))
+
+                if restart:
+                    continue
+                if not self.alarm_running:
+                    break
+
+                # 아직 점심 시작 전이면 팝업 표시 (log_time = 점심 시작 시각)
+                if datetime.now() < lunch_start_dt:
+                    self.root.after(0, lambda t=lunch_start_dt: self.show_alarm_popup(t))
+
+                # 점심 종료 시각까지 대기
+                while self.alarm_running:
+                    now = datetime.now()
+                    if now >= lunch_end_dt:
+                        break
+                    time.sleep(max(0.1, min(10, (lunch_end_dt - now).total_seconds())))
+
+                if not self.alarm_running:
+                    break
+
+                # 점심 자동 기록 (timestamp = 점심 종료 시각)
+                def _write_lunch(t=lunch_end_dt):
+                    try:
+                        self.write_log("", "점심 시간", t)
+                    except PermissionError:
+                        self._warn_file_locked()
+                self.root.after(0, _write_lunch)
+
+                # 재발화 방지
+                while self.alarm_running:
+                    now = datetime.now()
+                    if now > lunch_end_dt:
+                        break
+                    time.sleep(1)
+
+                continue
+
+            # 일반 슬롯 처리
             popup_time = next_mark - timedelta(minutes=offset)
 
-            # 팝업 시각(next_mark - offset)까지 대기. 10초마다 설정 변경 여부 확인.
             while self.alarm_running:
                 now = datetime.now()
                 if now >= popup_time:
@@ -856,15 +932,7 @@ class DailyReporter:
             if not self.alarm_running:
                 break
 
-            if self._is_lunch_time(next_mark, cfg):
-                def _write_lunch(t=next_mark):
-                    try:
-                        self.write_log("", "점심 시간", t)
-                    except PermissionError:
-                        self._warn_file_locked()
-                self.root.after(0, _write_lunch)
-            else:
-                self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
+            self.root.after(0, lambda t=next_mark: self.show_alarm_popup(t))
 
             # 동일 슬롯 재발화 방지: next_mark 지난 뒤에 다음 슬롯 계산.
             while self.alarm_running:
@@ -1003,10 +1071,23 @@ class DailyReporter:
         lunch_start_cfg = cfg.get('lunch_start', '').strip()
         lunch_end_cfg = cfg.get('lunch_end', '').strip()
         default_start = f"{work_start_cfg}:00" if work_start_cfg else "09:00:00"
-        log_rows = []  # (time_range, proj, desc)
-        for i, (t, proj, desc) in enumerate(work_entries[:len(_TMPL_TIMES)]):
-            start = default_start if i == 0 else work_entries[i - 1][0]
-            log_rows.append((f"{(start or t)[:5]}~{t[:5]}", proj, desc))
+        entries = work_entries[:len(_TMPL_TIMES)]
+        spans = []  # [start_hm, end_hm, proj, desc]
+        for i, (t, proj, desc) in enumerate(entries):
+            start = default_start if i == 0 else entries[i - 1][0]
+            spans.append([(start or t)[:5], t[:5], proj, desc])
+
+        # 점심 행은 설정한 점심 시간대로 표시하고, 앞뒤 업무 행도 그 경계에 맞춤
+        if lunch_start_cfg and lunch_end_cfg:
+            for i, span in enumerate(spans):
+                if span[3] == '점심 시간':
+                    span[0], span[1] = lunch_start_cfg, lunch_end_cfg
+                    if i > 0 and spans[i - 1][3] != '점심 시간':
+                        spans[i - 1][1] = lunch_start_cfg
+                    if i + 1 < len(spans) and spans[i + 1][3] != '점심 시간':
+                        spans[i + 1][0] = lunch_end_cfg
+
+        log_rows = [(f"{s}~{e}", proj, desc) for s, e, proj, desc in spans]
 
         # 날짜는 로그 파일 기준
         if log_date:
